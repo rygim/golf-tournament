@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Golf Tournament Standings</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%; min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f1a0f; color: #d4e8d4;
+    }
+    a { color: #6ecf6e; }
+    h1, h2, h3 { color: #8fdf8f; }
+    .app { max-width: 1200px; margin: 0 auto; padding: 1rem; }
+    .header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.5rem; border-bottom: 1px solid #2a4a2a; padding-bottom: 1rem; }
+    .header h1 { font-size: 1.5rem; }
+    .auth-bar { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; }
+    .btn { padding: 0.4rem 0.9rem; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem; font-weight: 600; transition: background 0.15s; }
+    .btn-primary { background: #2d8a2d; color: #fff; }
+    .btn-primary:hover { background: #3aa63a; }
+    .btn-danger { background: #8a2d2d; color: #fff; }
+    .btn-danger:hover { background: #a63a3a; }
+    .btn-secondary { background: #3a4a3a; color: #d4e8d4; }
+    .btn-secondary:hover { background: #4a5a4a; }
+    .btn-small { padding: 0.25rem 0.5rem; font-size: 0.75rem; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .tabs { display: flex; gap: 0; border-bottom: 2px solid #2a4a2a; margin-bottom: 1rem; }
+    .tab { padding: 0.5rem 1rem; background: transparent; border: none; color: #8aaa8a; cursor: pointer; font-size: 0.9rem; border-bottom: 2px solid transparent; margin-bottom: -2px; }
+    .tab:hover { color: #d4e8d4; }
+    .tab.active { color: #6ecf6e; border-bottom-color: #6ecf6e; }
+    .panel { display: none; }
+    .panel.active { display: block; }
+    .card { background: #1a2e1a; border: 1px solid #2a4a2a; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
+    .card h3 { margin-bottom: 0.5rem; font-size: 1rem; }
+    input, select { background: #0f1a0f; border: 1px solid #2a4a2a; color: #d4e8d4; padding: 0.35rem 0.5rem; border-radius: 4px; font-size: 0.85rem; }
+    input:focus, select:focus { outline: none; border-color: #6ecf6e; }
+    label { font-size: 0.8rem; color: #8aaa8a; display: block; margin-bottom: 0.2rem; }
+    .form-row { display: flex; gap: 0.5rem; align-items: flex-end; margin-bottom: 0.5rem; flex-wrap: wrap; }
+    .form-group { display: flex; flex-direction: column; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th, td { padding: 0.4rem 0.6rem; text-align: center; border: 1px solid #2a4a2a; }
+    th { background: #1a2e1a; color: #6ecf6e; font-weight: 600; position: sticky; top: 0; }
+    td { background: #0f1a0f; }
+    tr:hover td { background: #152015; }
+    .score-input { width: 40px; text-align: center; padding: 0.2rem; }
+    .beer-input { width: 50px; text-align: center; padding: 0.2rem; }
+    .rule-badge { display: inline-block; padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.7rem; font-weight: 600; margin: 0.1rem; }
+    .rule-badge.bonus { background: #2d5a2d; color: #8fdf8f; }
+    .rule-badge.penalty { background: #5a2d2d; color: #df8f8f; }
+    .rule-badge.wild { background: #5a5a2d; color: #dfdf8f; }
+    .rule-badge.fun { background: #2d2d5a; color: #8f8fdf; }
+    .standings-rank { font-weight: 700; color: #6ecf6e; }
+    .standings-rank.first { color: #ffd700; font-size: 1.1em; }
+    .standings-rank.second { color: #c0c0c0; }
+    .standings-rank.third { color: #cd7f32; }
+    .empty-state { text-align: center; padding: 2rem; color: #5a7a5a; font-style: italic; }
+    .rule-selector { display: flex; gap: 0.3rem; flex-wrap: wrap; margin-top: 0.3rem; }
+    .rule-chip { padding: 0.2rem 0.5rem; border-radius: 12px; font-size: 0.7rem; cursor: pointer; border: 1px solid #2a4a2a; background: #1a2e1a; color: #8aaa8a; transition: all 0.15s; }
+    .rule-chip:hover { border-color: #6ecf6e; }
+    .rule-chip.selected { background: #2d5a2d; border-color: #6ecf6e; color: #d4e8d4; }
+    .scorecard-scroll { overflow-x: auto; }
+    .round-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; }
+    .toast { position: fixed; bottom: 1rem; right: 1rem; background: #2d8a2d; color: #fff; padding: 0.6rem 1rem; border-radius: 6px; font-size: 0.85rem; z-index: 100; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+    .toast.show { opacity: 1; }
+    .hidden { display: none; }
+    .beer-icon { font-size: 1rem; }
+    .final-score-table th { font-size: 0.8rem; }
+    .highlight-winner { background: #1a3a1a !important; }
+    .rule-info { font-size: 0.75rem; color: #6a8a6a; margin-top: 0.2rem; }
+    .back-link { font-size: 0.85rem; color: #6a8a6a; text-decoration: none; }
+    .back-link:hover { color: #8fdf8f; }
+    .award-card { background: #1a2e1a; border: 1px solid #2a4a2a; border-radius: 8px; padding: 1rem; margin-bottom: 0.75rem; display: flex; align-items: flex-start; gap: 0.75rem; }
+    .award-icon { font-size: 2rem; flex-shrink: 0; width: 48px; text-align: center; }
+    .award-body { flex: 1; }
+    .award-title { font-size: 0.95rem; font-weight: 700; color: #8fdf8f; }
+    .award-winner { font-size: 1.1rem; font-weight: 700; color: #ffd700; margin-top: 0.15rem; }
+    .award-detail { font-size: 0.8rem; color: #6a8a6a; margin-top: 0.2rem; }
+    .award-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 0.75rem; }
+    @media (max-width: 768px) {
+      .form-row { flex-direction: column; }
+      .header { flex-direction: column; align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="header">
+      <div>
+        <a href="/tools" class="back-link">← Tools</a>
+        <h1>⛳ Golf Tournament Standings</h1>
+      </div>
+      <div class="auth-bar" id="auth-bar">
+        <span id="auth-status">Loading...</span>
+      </div>
+    </div>
+
+    <div class="tabs" role="tablist">
+      <button class="tab active" data-tab="standings" role="tab">Standings</button>
+      <button class="tab" data-tab="scorecard" role="tab">Scorecard</button>
+      <button class="tab" data-tab="awards" role="tab">🏆 Awards</button>
+      <button class="tab" data-tab="rules" role="tab">Rules Library</button>
+      <button class="tab" data-tab="setup" role="tab">Setup</button>
+    </div>
+
+    <div id="standings-panel" class="panel active" role="tabpanel">
+      <div id="standings-content"><p class="empty-state">No tournament data yet. Go to Setup to get started.</p></div>
+    </div>
+
+    <div id="scorecard-panel" class="panel" role="tabpanel">
+      <div id="scorecard-content"><p class="empty-state">Set up a tournament first.</p></div>
+    </div>
+
+    <div id="rules-panel" class="panel" role="tabpanel">
+      <div id="rules-content"></div>
+    </div>
+
+    <div id="awards-panel" class="panel" role="tabpanel">
+      <div id="awards-content"><p class="empty-state">Play some rounds first to unlock awards.</p></div>
+    </div>
+
+    <div id="setup-panel" class="panel" role="tabpanel">
+      <div id="setup-content"></div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

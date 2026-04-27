@@ -1,0 +1,21 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Tournament data — anyone can read, editors can write
+    match /golf_tournaments/{id} {
+      allow read;
+      allow create, update, delete: if request.auth != null
+        && exists(/databases/$(database)/documents/golf_editors/allowed)
+        && request.auth.token.email in get(/databases/$(database)/documents/golf_editors/allowed).data.emails;
+    }
+
+    // Editor allowlist — authenticated users can read, no client writes
+    match /golf_editors/{id} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+  }
+}

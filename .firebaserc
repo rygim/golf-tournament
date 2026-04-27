@@ -1,0 +1,6 @@
+{
+  "_instructions": "Replace 'your-firebase-project-id' with your actual Firebase project ID",
+  "projects": {
+    "default": "your-firebase-project-id"
+  }
+}

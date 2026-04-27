@@ -1,0 +1,8 @@
+node_modules/
+.firebase/
+*.log
+.env
+.env.local
+service-account-key.json
+sa-key.json
+firebase-admin-key.json
