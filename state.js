@@ -39,21 +39,34 @@ export async function initFirestore(firebaseApp) {
 }
 
 /**
- * Check if a user email is in the editors allowlist
+ * Check if a user email is in the editors allowlist.
+ * Tries Firestore first; falls back to .golf-editors.json for local dev.
  */
 export async function isAllowedEditor(email) {
-  if (!_firestore || !_firestoreModules || !email) return false;
-  try {
-    const { doc, getDoc } = _firestoreModules;
-    const snap = await getDoc(doc(_firestore, EDITORS_DOC));
-    if (!snap.exists()) return false;
-    const data = snap.data();
-    const emails = data.emails || [];
-    return emails.includes(email.toLowerCase());
-  } catch (e) {
-    console.warn('Could not check editor allowlist:', e);
-    return false;
+  if (!email) return false;
+
+  if (_firestore && _firestoreModules) {
+    try {
+      const { doc, getDoc } = _firestoreModules;
+      const snap = await getDoc(doc(_firestore, EDITORS_DOC));
+      if (snap.exists()) {
+        return (snap.data().emails || []).includes(email.toLowerCase());
+      }
+    } catch (e) {
+      console.warn('Could not check editor allowlist:', e);
+    }
   }
+
+  // Local dev fallback: .golf-editors.json (gitignored)
+  try {
+    const resp = await fetch('/.golf-editors.json');
+    if (resp.ok) {
+      const data = await resp.json();
+      return (data.emails || []).includes(email.toLowerCase());
+    }
+  } catch (e) { /* file not present */ }
+
+  return false;
 }
 
 /**

@@ -3,6 +3,11 @@ import { RULES_LIBRARY, RULE_CATEGORIES } from './rules.js';
 import { calculateStandings, calculateRoundScore } from './scoring.js';
 import { exportToExcel } from './excel-export.js';
 import { computeAwards } from './awards.js';
+import { API_KEY, setApiKey, searchCourses, searchCoursesOpenGolf, getCourseDetailOpenGolf } from './courseapi.js';
+
+// Set to true to bypass auth for local development. Never deploy with this on.
+const DEV_MODE_EDITOR = false;
+const GCAPI_KEY_STORAGE = 'golf-gcapi-key';
 
 let state = null;
 let isAuthenticated = false;
@@ -37,7 +42,9 @@ async function initAuth() {
     }
 
     if (!firebaseConfig.apiKey) {
+      isEditor = DEV_MODE_EDITOR;
       renderAuthBar(null, null, null);
+      renderAll();
       return;
     }
 
@@ -53,9 +60,9 @@ async function initAuth() {
     onAuthStateChanged(auth, async (user) => {
       currentUser = user;
       isAuthenticated = !!user;
-      isEditor = false;
+      isEditor = DEV_MODE_EDITOR;
 
-      if (user && user.email) {
+      if (!DEV_MODE_EDITOR && user && user.email) {
         isEditor = await isAllowedEditor(user.email);
       }
 
@@ -66,7 +73,9 @@ async function initAuth() {
     renderAuthBar(auth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, signOut);
   } catch (e) {
     console.warn('Firebase auth not available, running in view-only mode', e);
+    isEditor = DEV_MODE_EDITOR;
     renderAuthBar(null, null, null, null, null);
+    renderAll();
   }
 }
 
@@ -248,12 +257,22 @@ function renderScorecard() {
         </div>
       </div>`;
 
-    // Par row header
-    html += '<div class="scorecard-scroll"><table><thead><tr><th>Player</th>';
-    for (let h = 0; h < round.holes; h++) {
-      html += `<th>H${h + 1}<br><span style="font-size:0.65rem;color:#6a8a6a">P${round.pars[h] || 4}</span></th>`;
+    // Three-row header: Hole / Par / Distance
+    const hasYardages = round.yardages?.some(y => y > 0);
+    const statSpan = hasYardages ? 3 : 2;
+    html += '<div class="scorecard-scroll"><table><thead>';
+    html += `<tr><th style="text-align:left">Hole</th>`;
+    for (let h = 0; h < round.holes; h++) html += `<th>${h + 1}</th>`;
+    html += `<th rowspan="${statSpan}" style="vertical-align:middle">🍺</th><th rowspan="${statSpan}" style="vertical-align:middle">Raw</th><th rowspan="${statSpan}" style="vertical-align:middle">Adj</th></tr>`;
+    html += `<tr><th style="text-align:left;color:#8aaa8a;font-weight:400">Par</th>`;
+    for (let h = 0; h < round.holes; h++) html += `<th>${round.pars[h] || 4}</th>`;
+    html += '</tr>';
+    if (hasYardages) {
+      html += `<tr><th style="text-align:left;color:#5a7a5a;font-weight:400">Dist.</th>`;
+      for (let h = 0; h < round.holes; h++) html += `<th style="color:#5a7a5a;font-weight:400">${round.yardages[h] || '—'}</th>`;
+      html += '</tr>';
     }
-    html += '<th>🍺</th><th>Raw</th><th>Adj</th></tr></thead><tbody>';
+    html += '</thead><tbody>';
 
     state.players.forEach(player => {
       const pd = round.scores?.[player.id];
@@ -262,14 +281,15 @@ function renderScorecard() {
 
       html += `<tr><td style="text-align:left;white-space:nowrap">`;
 
+      const teeBadge = pd?.tee_name ? `<span style="font-size:0.65rem;color:#6a8a6a;margin-left:0.3rem">${pd.tee_name}</span>` : '';
       if (isEditor) {
         const checked = participated ? 'checked' : '';
         html += `<label style="display:inline;font-size:0.85rem;color:#d4e8d4">
           <input type="checkbox" class="participate-check" data-round="${round.id}" data-player="${player.id}" ${checked} style="margin-right:4px" />
           ${player.name}
-        </label>`;
+        </label>${teeBadge}`;
       } else {
-        html += `${player.name}${!participated ? ' <span style="color:#5a7a5a;font-size:0.7rem">(DNP)</span>' : ''}`;
+        html += `${player.name}${teeBadge}${!participated ? ' <span style="color:#5a7a5a;font-size:0.7rem">(DNP)</span>' : ''}`;
       }
       html += '</td>';
 
@@ -529,8 +549,19 @@ function renderSetup() {
   // Rounds
   html += `<div class="card"><h3>Rounds (${state.rounds.length})</h3>
     <div style="margin-bottom:0.75rem;padding-bottom:0.75rem;border-bottom:1px solid #2a4a2a">
-      <label style="font-size:0.9rem;color:#8fdf8f;font-weight:600">⛳ Search Golf Course (OpenGolfAPI)</label>
-      <p style="font-size:0.75rem;color:#6a8a6a;margin:0.2rem 0 0.4rem">Search for a course to auto-fill pars and course info. <a href="https://opengolfapi.org" target="_blank" rel="noopener">Data from OpenGolfAPI (ODbL)</a></p>
+      <label style="font-size:0.9rem;color:#8fdf8f;font-weight:600">⛳ Search Golf Course</label>
+      <div style="margin:0.3rem 0 0.5rem;padding:0.4rem 0.6rem;background:#0a140a;border-radius:4px">
+        <label style="font-size:0.8rem;color:#a0c8a0">GolfCourseAPI Key <a href="https://golfcourseapi.com" target="_blank" rel="noopener" style="font-size:0.75rem;color:#6a8a6a">(free key at golfcourseapi.com)</a></label>
+        <div style="display:flex;gap:0.5rem;align-items:center;margin-top:0.25rem;flex-wrap:wrap">
+          <input type="text" id="gcapi-key-input" placeholder="Paste API key here" value="${API_KEY}" style="width:280px;font-family:monospace;font-size:0.78rem" />
+          <button class="btn btn-secondary btn-small" id="gcapi-key-save-btn">Save Key</button>
+          ${API_KEY ? '<button class="btn btn-secondary btn-small" id="gcapi-key-clear-btn">Clear (use OpenGolfAPI instead)</button>' : ''}
+        </div>
+        <p style="font-size:0.75rem;color:#6a8a6a;margin:0.3rem 0 0">${API_KEY
+          ? '&#10003; Using <strong style="color:#8fdf8f">GolfCourseAPI</strong> — full tee &amp; yardage data per hole.'
+          : 'No key set — using <a href="https://opengolfapi.org" target="_blank" rel="noopener">OpenGolfAPI</a> (basic pars only, no tee selection).'
+        }</p>
+      </div>
       <div class="form-row">
         <div class="form-group"><label>Course Name or City</label>
           <input type="text" id="course-search-input" placeholder="e.g. Pebble Beach, Augusta" style="width:250px" />
@@ -556,17 +587,18 @@ function renderSetup() {
     const courseInfo = round.courseInfo;
     let courseHtml = '';
     if (courseInfo) {
+      const displayName = courseInfo.course_name || courseInfo.club_name || courseInfo.name || '';
+      const par = courseInfo.par_total || courseInfo.par || '?';
+      const teeLabel = courseInfo.tee_name ? ` · ${courseInfo.tee_name} tees` : '';
+      const yardsLabel = courseInfo.total_yards ? ` · ${courseInfo.total_yards} yds` : '';
+      const ratingLabel = courseInfo.course_rating ? ` · ${courseInfo.course_rating}/${courseInfo.slope_rating}` : '';
       courseHtml = `<div style="margin-bottom:0.5rem;padding:0.4rem 0.6rem;background:#0a140a;border-radius:4px;font-size:0.8rem">
         <div style="display:flex;justify-content:space-between;align-items:start;gap:0.5rem;flex-wrap:wrap">
           <div>
-            <strong style="color:#8fdf8f">⛳ ${courseInfo.name || ''}</strong>
-            <div style="color:#6a8a6a">${courseInfo.city || ''}${courseInfo.state ? ', ' + courseInfo.state : ''} · ${courseInfo.type || ''} · Par ${courseInfo.par || '?'}${courseInfo.year_built ? ' · Est. ' + courseInfo.year_built : ''}</div>
-            ${courseInfo.phone ? `<div style="color:#6a8a6a">📞 ${courseInfo.phone}</div>` : ''}
+            <strong style="color:#8fdf8f">⛳ ${displayName}</strong>
+            <div style="color:#6a8a6a">${courseInfo.city || ''}${courseInfo.state ? ', ' + courseInfo.state : ''} · Par ${par}${teeLabel}${yardsLabel}${ratingLabel}</div>
           </div>
-          <div style="display:flex;gap:0.3rem;flex-wrap:wrap">
-            ${courseInfo.website ? `<a href="${courseInfo.website}" target="_blank" rel="noopener" class="btn btn-secondary btn-small">🌐 Website</a>` : ''}
-            ${courseInfo.latitude ? `<a href="https://www.google.com/maps?q=${courseInfo.latitude},${courseInfo.longitude}" target="_blank" rel="noopener" class="btn btn-secondary btn-small">📍 Map</a>` : ''}
-          </div>
+          ${courseInfo.latitude ? `<div><a href="https://www.google.com/maps?q=${courseInfo.latitude},${courseInfo.longitude}" target="_blank" rel="noopener" class="btn btn-secondary btn-small">📍 Map</a></div>` : ''}
         </div>
       </div>`;
     }
@@ -588,7 +620,23 @@ function renderSetup() {
             <option value="5">All Par 5</option>
           </select>
         </div>
+        ${round.yardages?.some(y => y > 0) ? `<div style="font-size:0.75rem;color:#6a8a6a;margin-top:0.2rem">Yardages: ${round.yardages.join(', ')}</div>` : ''}
       </div>
+      ${round.courseInfo?.tees?.length ? `<div style="margin-top:0.5rem;padding-top:0.5rem;border-top:1px solid #1a2e1a">
+        <label style="font-size:0.8rem;color:#8fdf8f;font-weight:600">Player Tees</label>
+        <div style="margin-top:0.3rem">
+          ${state.players.map(p => {
+            const teeVal = round.scores?.[p.id]?.tee_name || '';
+            return `<div style="display:flex;align-items:center;gap:0.5rem;padding:0.15rem 0">
+              <span style="min-width:110px;font-size:0.82rem">${p.name}</span>
+              <select class="player-tee-select" data-round="${round.id}" data-player="${p.id}">
+                <option value="">— choose tee —</option>
+                ${round.courseInfo.tees.map(t => `<option value="${t.tee_name}" ${teeVal === t.tee_name ? 'selected' : ''}>${t.tee_name} (${t.total_yards} yds${t.tee_gender === 'female' ? ', W' : ''})</option>`).join('')}
+              </select>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>` : ''}
       <div style="margin-top:0.4rem">
         <label>Active Rules for this Round:</label>
         <div class="rule-selector">`;
@@ -679,23 +727,41 @@ function attachSetupListeners() {
     // Attach pending course info if a course was selected
     if (window._pendingCourseInfo) {
       roundData.courseInfo = window._pendingCourseInfo;
-      // Apply pars from course scorecard if available
-      if (window._pendingCourseInfo.pars && window._pendingCourseInfo.pars.length > 0) {
+      if (window._pendingCourseInfo.pars?.length > 0) {
         roundData.pars = window._pendingCourseInfo.pars.slice(0, holes);
         while (roundData.pars.length < holes) roundData.pars.push(4);
       }
+      if (window._pendingCourseInfo.yardages?.length > 0) {
+        roundData.yardages = window._pendingCourseInfo.yardages.slice(0, holes);
+        while (roundData.yardages.length < holes) roundData.yardages.push(0);
+      }
       window._pendingCourseInfo = null;
-      window._pendingCoursePars = null;
     }
     state.rounds.push(roundData);
     document.getElementById('new-round-name').value = '';
     persist(); toast(`${name} added`);
   });
 
+  // GolfCourseAPI key
+  document.getElementById('gcapi-key-save-btn')?.addEventListener('click', () => {
+    const key = document.getElementById('gcapi-key-input')?.value.trim() || '';
+    if (key) localStorage.setItem(GCAPI_KEY_STORAGE, key);
+    else localStorage.removeItem(GCAPI_KEY_STORAGE);
+    setApiKey(key);
+    renderSetup();
+    toast(key ? 'API key saved — using GolfCourseAPI' : 'Key cleared — using OpenGolfAPI');
+  });
+  document.getElementById('gcapi-key-clear-btn')?.addEventListener('click', () => {
+    localStorage.removeItem(GCAPI_KEY_STORAGE);
+    setApiKey('');
+    renderSetup();
+    toast('Key cleared — using OpenGolfAPI');
+  });
+
   // Course search
-  document.getElementById('course-search-btn')?.addEventListener('click', searchCourses);
+  document.getElementById('course-search-btn')?.addEventListener('click', handleCourseSearch);
   document.getElementById('course-search-input')?.addEventListener('keydown', e => {
-    if (e.key === 'Enter') searchCourses();
+    if (e.key === 'Enter') handleCourseSearch();
   });
 
   document.querySelectorAll('.remove-round-btn').forEach(btn => {
@@ -729,6 +795,16 @@ function attachSetupListeners() {
       round.pars = new Array(round.holes).fill(parseInt(select.value));
       select.value = '';
       persist(); toast('Pars updated');
+    });
+  });
+
+  document.querySelectorAll('.player-tee-select').forEach(select => {
+    select.addEventListener('change', () => {
+      if (!isEditor) return;
+      const { round: roundId, player: playerId } = select.dataset;
+      ensureScoreData(roundId, playerId);
+      state.rounds.find(r => r.id === roundId).scores[playerId].tee_name = select.value || null;
+      persist();
     });
   });
 
@@ -812,8 +888,8 @@ function renderAwards() {
 }
 
 // === Render All ===
-// --- OpenGolfAPI Course Search ---
-async function searchCourses() {
+// --- Course Search (GolfCourseAPI with tee selection, or OpenGolfAPI fallback) ---
+async function handleCourseSearch() {
   const input = document.getElementById('course-search-input');
   const resultsDiv = document.getElementById('course-search-results');
   const query = input?.value.trim();
@@ -822,99 +898,203 @@ async function searchCourses() {
   resultsDiv.innerHTML = '<p style="font-size:0.8rem;color:#6a8a6a">Searching...</p>';
 
   try {
-    const resp = await fetch(`https://api.opengolfapi.org/v1/courses/search?q=${encodeURIComponent(query)}`);
-    if (!resp.ok) throw new Error('API error ' + resp.status);
-    const data = await resp.json();
-    const courses = data.courses || [];
+    let courses;
+    if (API_KEY) {
+      courses = await searchCourses(query);
+      window._courseSearchSource = 'golfcourseapi';
+    } else {
+      courses = await searchCoursesOpenGolf(query);
+      window._courseSearchSource = 'opengolfapi';
+    }
+    window._courseSearchResults = courses;
 
     if (courses.length === 0) {
       resultsDiv.innerHTML = '<p style="font-size:0.8rem;color:#6a8a6a">No courses found. Try a different search.</p>';
       return;
     }
 
-    resultsDiv.innerHTML = courses.slice(0, 15).map(c => `
-      <div class="course-result" data-course-id="${c.id}" style="display:flex;justify-content:space-between;align-items:center;padding:0.4rem 0.5rem;border-bottom:1px solid #1a2e1a;cursor:pointer;transition:background 0.1s" onmouseover="this.style.background='#1a2e1a'" onmouseout="this.style.background='transparent'">
-        <div>
-          <div style="font-weight:600;font-size:0.85rem">${c.course_name || c.club_name || 'Unknown'}</div>
-          <div style="font-size:0.75rem;color:#6a8a6a">${c.city || ''}${c.state ? ', ' + c.state : ''} · ${c.course_type || ''} · ${c.holes_count || '?'} holes · Par ${c.par_total || '?'}${c.year_built ? ' · ' + c.year_built : ''}</div>
-        </div>
-        <button class="btn btn-primary btn-small" data-select-course="${c.id}">Select</button>
-      </div>
-    `).join('');
-
-    // Bind select buttons
-    resultsDiv.querySelectorAll('[data-select-course]').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const courseId = btn.dataset.selectCourse;
-        await selectCourse(courseId, courses.find(c => c.id === courseId));
-      });
-    });
+    renderCourseResults(courses, resultsDiv);
   } catch (err) {
     resultsDiv.innerHTML = `<p style="font-size:0.8rem;color:#c0392b">Search failed: ${err.message}</p>`;
   }
 }
 
-async function selectCourse(courseId, basicData) {
-  const resultsDiv = document.getElementById('course-search-results');
+function renderCourseResults(courses, resultsDiv) {
+  resultsDiv.innerHTML = courses.slice(0, 20).map(c => {
+    const name = c.club_name || c.course_name || 'Unknown';
+    const city = c.location?.city || c.city || '';
+    const state = c.location?.state || c.state || '';
+    const allTees = [...(c.tees?.male || []), ...(c.tees?.female || [])];
+    const numHoles = allTees[0]?.number_of_holes || c.holes_count || '?';
+    const par = allTees[0]?.par_total || c.par_total || '?';
+    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:0.4rem 0.5rem;border-bottom:1px solid #1a2e1a;gap:0.5rem">
+      <div>
+        <div style="font-weight:600;font-size:0.85rem">${name}</div>
+        <div style="font-size:0.75rem;color:#6a8a6a">${city}${state ? ', ' + state : ''} · ${numHoles} holes · Par ${par}</div>
+      </div>
+      <button class="btn btn-primary btn-small" data-select-course="${c.id}">Select</button>
+    </div>`;
+  }).join('');
 
-  // Try to get detailed course data (may include scorecard)
-  let course = basicData;
-  try {
-    const resp = await fetch(`https://api.opengolfapi.org/v1/courses/${courseId}`);
-    if (resp.ok) {
-      const detailed = await resp.json();
-      if (detailed) course = detailed;
-    }
-  } catch (e) { /* use basic data */ }
+  resultsDiv.querySelectorAll('[data-select-course]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const courseId = btn.dataset.selectCourse;
+      const course = (window._courseSearchResults || []).find(c => String(c.id) === courseId);
+      if (!course) return;
+      if (window._courseSearchSource === 'golfcourseapi') {
+        renderTeeSelector(course, resultsDiv);
+      } else {
+        selectCourseOpenGolf(course, resultsDiv);
+      }
+    });
+  });
+}
+
+function renderTeeSelector(course, resultsDiv) {
+  const maleTees = course.tees?.male || [];
+  const femaleTees = course.tees?.female || [];
+  const courseName = course.club_name || course.course_name || 'Unknown Course';
+
+  function teeRow(tee, gender) {
+    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:0.35rem 0.5rem;border-bottom:1px solid #1a2e1a;gap:0.5rem">
+      <div>
+        <span style="font-weight:600;font-size:0.85rem">${tee.tee_name}</span>
+        <span style="font-size:0.75rem;color:#6a8a6a"> · ${tee.total_yards} yds · Par ${tee.par_total} · ${tee.course_rating}/${tee.slope_rating}</span>
+      </div>
+      <button class="btn btn-primary btn-small" data-tee-gender="${gender}" data-tee-name="${tee.tee_name}">Select</button>
+    </div>`;
+  }
+
+  let html = `<div style="background:#0a140a;border-radius:4px;padding:0.5rem">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.4rem">
+      <strong style="color:#8fdf8f;font-size:0.85rem">${courseName}</strong>
+      <button class="btn btn-secondary btn-small" id="tee-back-btn">← Back</button>
+    </div>
+    <p style="font-size:0.75rem;color:#6a8a6a;margin-bottom:0.4rem">${course.location?.city || ''}${course.location?.state ? ', ' + course.location.state : ''} · Choose tees:</p>`;
+
+  if (maleTees.length) {
+    html += `<div style="font-size:0.7rem;color:#8aaa8a;padding:0.2rem 0.5rem;background:#1a2e1a">Men's Tees</div>`;
+    html += maleTees.map(t => teeRow(t, 'male')).join('');
+  }
+  if (femaleTees.length) {
+    html += `<div style="font-size:0.7rem;color:#8aaa8a;padding:0.2rem 0.5rem;background:#1a2e1a;margin-top:0.25rem">Women's Tees</div>`;
+    html += femaleTees.map(t => teeRow(t, 'female')).join('');
+  }
+  html += '</div>';
+  resultsDiv.innerHTML = html;
+
+  document.getElementById('tee-back-btn')?.addEventListener('click', () => {
+    renderCourseResults(window._courseSearchResults || [], resultsDiv);
+  });
+
+  resultsDiv.querySelectorAll('[data-tee-gender]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const gender = btn.dataset.teeGender;
+      const teeName = btn.dataset.teeName;
+      const tee = course.tees[gender]?.find(t => t.tee_name === teeName);
+      if (tee) selectTee(course, tee, gender, resultsDiv);
+    });
+  });
+}
+
+function selectTee(course, tee, gender, resultsDiv) {
+  const courseName = course.club_name || course.course_name || 'Unknown Course';
+  const holes = tee.holes || [];
+  const numHoles = tee.number_of_holes || holes.length || 18;
+  const pars = holes.map(h => h.par || 4);
+  const yardages = holes.map(h => h.yardage || 0);
+
+  document.getElementById('new-round-name').value = courseName;
+  document.getElementById('new-round-holes').value = numHoles <= 9 ? '9' : '18';
+
+  const teeSummary = (t, g) => ({
+    tee_name: t.tee_name, tee_gender: g,
+    total_yards: t.total_yards, par_total: t.par_total,
+    course_rating: t.course_rating, slope_rating: t.slope_rating,
+    number_of_holes: t.number_of_holes,
+  });
+
+  window._pendingCourseInfo = {
+    id: course.id,
+    club_name: course.club_name || '',
+    course_name: course.course_name || '',
+    city: course.location?.city || '',
+    state: course.location?.state || '',
+    country: course.location?.country || '',
+    latitude: course.location?.latitude || null,
+    longitude: course.location?.longitude || null,
+    tee_name: tee.tee_name,
+    tee_gender: gender,
+    par_total: tee.par_total,
+    total_yards: tee.total_yards,
+    course_rating: tee.course_rating,
+    slope_rating: tee.slope_rating,
+    number_of_holes: numHoles,
+    pars,
+    yardages,
+    tees: [
+      ...(course.tees?.male || []).map(t => teeSummary(t, 'male')),
+      ...(course.tees?.female || []).map(t => teeSummary(t, 'female')),
+    ],
+  };
+
+  const genderLabel = gender === 'male' ? "Men's" : "Women's";
+  resultsDiv.innerHTML = `
+    <div style="padding:0.5rem;background:#1a2e1a;border-radius:4px;font-size:0.85rem">
+      <strong style="color:#8fdf8f">✓ ${courseName} — ${tee.tee_name} (${genderLabel})</strong>
+      <div style="color:#6a8a6a;font-size:0.8rem">${course.location?.city || ''}${course.location?.state ? ', ' + course.location.state : ''} · Par ${tee.par_total} · ${tee.total_yards} yds · Rating ${tee.course_rating}/${tee.slope_rating}</div>
+      <div style="color:#6a8a6a;font-size:0.75rem;margin-top:0.25rem">Pars: ${pars.join(', ')}</div>
+      <div style="color:#6a8a6a;font-size:0.75rem">Yards: ${yardages.join(', ')}</div>
+      <div style="margin-top:0.3rem;font-size:0.75rem;color:#5a7a5a">Click "Add Round" below to use this course and tee selection.</div>
+    </div>
+  `;
+  toast(`Selected: ${courseName} — ${tee.tee_name}`);
+}
+
+async function selectCourseOpenGolf(basicCourse, resultsDiv) {
+  resultsDiv.innerHTML = '<p style="font-size:0.8rem;color:#6a8a6a">Loading course details...</p>';
+  const detailed = await getCourseDetailOpenGolf(basicCourse.id);
+  const course = detailed || basicCourse;
 
   const name = course.course_name || course.club_name || 'Unknown Course';
-  const holes = course.holes_count || 18;
+  const numHoles = course.holes_count || 18;
 
-  // Extract pars from scorecard if available
   let pars = null;
   if (course.scorecard && Array.isArray(course.scorecard) && course.scorecard.length > 0) {
     pars = course.scorecard.sort((a, b) => a.hole - b.hole).map(h => h.par || 4);
   }
 
-  // Fill in the round form
   document.getElementById('new-round-name').value = name;
-  const holesSelect = document.getElementById('new-round-holes');
-  if (holes <= 9) holesSelect.value = '9';
-  else holesSelect.value = '18';
+  document.getElementById('new-round-holes').value = numHoles <= 9 ? '9' : '18';
 
-  // Store course info for when the round is created
   window._pendingCourseInfo = {
-    id: courseId,
-    name,
+    id: basicCourse.id,
+    course_name: name,
     city: course.city || '',
     state: course.state || '',
-    type: course.course_type || '',
-    par: course.par_total || null,
-    holes: holes,
-    year_built: course.year_built || null,
-    phone: course.phone || '',
-    website: course.website || '',
+    country: '',
     latitude: course.latitude || null,
     longitude: course.longitude || null,
-    address: course.address || '',
-    pars: pars
+    par_total: course.par_total || null,
+    total_yards: null,
+    number_of_holes: numHoles,
+    pars,
+    yardages: null,
+    tees: [],
   };
-
-  // If we got pars, we'll apply them after the round is created
-  if (pars) {
-    window._pendingCoursePars = pars;
-  }
 
   resultsDiv.innerHTML = `
     <div style="padding:0.5rem;background:#1a2e1a;border-radius:4px;font-size:0.85rem">
-      <strong style="color:#8fdf8f">✓ Selected: ${name}</strong>
-      <div style="color:#6a8a6a;font-size:0.8rem">${course.city || ''}${course.state ? ', ' + course.state : ''} · Par ${course.par_total || '?'} · ${holes} holes</div>
-      ${pars ? `<div style="color:#6a8a6a;font-size:0.75rem;margin-top:0.3rem">Pars: ${pars.join(', ')}</div>` : '<div style="color:#6a8a6a;font-size:0.75rem;margin-top:0.3rem">No hole-by-hole par data available — you can enter pars manually after adding the round.</div>'}
-      <div style="margin-top:0.3rem;font-size:0.75rem;color:#6a8a6a">Click "Add Round" to create the round with this course.</div>
+      <strong style="color:#8fdf8f">✓ ${name}</strong>
+      <div style="color:#6a8a6a;font-size:0.8rem">${course.city || ''}${course.state ? ', ' + course.state : ''} · Par ${course.par_total || '?'} · ${numHoles} holes</div>
+      ${pars
+        ? `<div style="color:#6a8a6a;font-size:0.75rem;margin-top:0.25rem">Pars: ${pars.join(', ')}</div>`
+        : '<div style="color:#6a8a6a;font-size:0.75rem;margin-top:0.25rem">No hole-by-hole par data available — you can enter pars manually after adding the round.</div>'
+      }
+      <div style="margin-top:0.3rem;font-size:0.75rem;color:#5a7a5a">Click "Add Round" below to use this course.</div>
     </div>
   `;
-
   toast(`Selected: ${name}`);
 }
 
@@ -928,6 +1108,7 @@ function renderAll() {
 
 // === Init ===
 initTabs();
+setApiKey(localStorage.getItem(GCAPI_KEY_STORAGE) || '');
 // Load from localStorage first for instant render, then Firestore will override via initAuth
 state = state || (function() { try { const raw = localStorage.getItem('golf-tournament-state'); return raw ? JSON.parse(raw) : null; } catch(e) { return null; } })() || { tournamentName: 'Weekend Tournament', players: [], rounds: [], globalRules: [], holeRuleOverrides: {}, beerModifier: { beersPerStroke: 3, strokesOff: 1 } };
 renderAll();

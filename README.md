@@ -1,6 +1,6 @@
 # Golf Tournament Standings
 
-A web-based golf tournament tracker with live standings, custom scoring rules, beer modifiers, awards, and OpenGolfAPI course integration.
+A web-based golf tournament tracker with live standings, custom scoring rules, beer modifiers, awards, and GolfCourseAPI course integration.
 
 ## Features
 
@@ -8,10 +8,12 @@ A web-based golf tournament tracker with live standings, custom scoring rules, b
 - **Multi-Round Support** — Track multiple rounds with per-round rules
 - **Custom Scoring Rules** — Mulligan madness, worst ball, scramble, and more
 - **Beer Modifier** — Because every golf tournament needs one 🍺
-- **Course Search** — Search and auto-fill course data from [OpenGolfAPI](https://opengolfapi.org) (par data, location, contact info, map links)
+- **Course Search** — Search by course name or location; uses [GolfCourseAPI](https://golfcourseapi.com) (full tee + yardage data, requires a free API key entered in Setup) or falls back to [OpenGolfAPI](https://opengolfapi.org) (basic par data, no key needed)
+- **Tee Selection** — All available tees (men's and women's) are stored per round; each player can be assigned their own tee (e.g. Blue, White, Red)
+- **Scorecard with Distances** — Hole headers show hole number, par, and yardage in separate rows; each player's chosen tee is shown inline
 - **Awards** — Auto-generated awards ceremony with longest drive, most improved, etc.
 - **Excel Export** — Export full tournament data to spreadsheet
-- **Editor Access Control** — Only allowed editors can modify tournament data
+- **Editor Access Control** — Only allowed editors can modify tournament data; supports a local `.golf-editors.json` allowlist for development
 - **Firebase Persistence** — Data syncs across devices via Firestore
 
 ## Setup
@@ -44,15 +46,23 @@ Editors are managed via a Firestore document. In the Firebase Console:
 3. Create document `allowed`
 4. Add field `emails` (array) with editor email addresses
 
-Or use the Firebase Admin SDK:
-```bash
-# Install firebase-admin if needed
-npm install firebase-admin
+#### Local development
 
-# Use the seed script pattern from the main project
+Create a `.golf-editors.json` file in the project root (it is gitignored):
+
+```json
+{
+  "emails": ["you@example.com"]
+}
 ```
 
-### 5. Open
+When Firebase is not configured (e.g. running via Live Server), the app falls back to this file for editor access.
+
+### 5. Configure GolfCourseAPI (optional)
+
+Course search works without a key via OpenGolfAPI (basic par data only). For full tee selection and per-hole yardages, get a free API key at [golfcourseapi.com](https://golfcourseapi.com) and paste it into the **GolfCourseAPI Key** field in the Setup tab. The key is stored in your browser's `localStorage` and is never committed to source control.
+
+### 6. Open
 
 Visit your Firebase Hosting URL (shown after deploy) and sign in with Google.
 
@@ -60,14 +70,16 @@ Visit your Firebase Hosting URL (shown after deploy) and sign in with Google.
 
 - Vanilla JavaScript (no build step, no frameworks)
 - Firebase Hosting, Auth, and Firestore
-- [OpenGolfAPI](https://opengolfapi.org) for course data (free, ODbL licensed)
+- [GolfCourseAPI](https://golfcourseapi.com) for full tee + yardage data (optional, key entered in Setup)
+- [OpenGolfAPI](https://opengolfapi.org) as a keyless fallback (basic par data)
 
 ## File Structure
 
 ```
 index.html        — Main page
 app.js            — App initialization, auth, UI rendering, course search
-state.js          — Firestore/localStorage persistence
+courseapi.js      — Course search client (GolfCourseAPI + OpenGolfAPI fallback)
+state.js          — Firestore/localStorage persistence, editor allowlist
 scoring.js        — Score calculation engine
 rules.js          — Scoring rules library
 awards.js         — Awards generation

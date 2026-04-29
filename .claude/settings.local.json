@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:api.golfcourseapi.com)",
+      "WebFetch(domain:golfcourseapi.com)"
+    ]
+  }
+}

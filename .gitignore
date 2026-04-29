@@ -6,3 +6,4 @@ node_modules/
 service-account-key.json
 sa-key.json
 firebase-admin-key.json
+.golf-editors.json
