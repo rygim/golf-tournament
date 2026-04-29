@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -H \"Authorization: Key WBBBY6AYZ3FR7OSNMSNK2WYXMU\" \"https://api.golfcourseapi.com/v1/search?search_query=Pebble+Beach\")",
+      "Bash(curl -s -w \"\\\\nHTTP_STATUS:%{http_code}\" -H \"Authorization: Key WBBBY6AYZ3FR7OSNMSNK2WYXMU\" \"https://api.golfcourseapi.com/v1/search?search_query=Pebble+Beach\")",
+      "Bash(command -v firebase)",
+      "Bash(command -v node)",
+      "Bash(command -v python)",
+      "Bash(command -v python3)",
+      "PowerShell(Get-Command node, npx, firebase, python, python3, php -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-Command node -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-Command npx -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-Command firebase -ErrorAction SilentlyContinue)",
+      "PowerShell(node --version 2>&1)",
+      "PowerShell(npx --version 2>&1)",
+      "PowerShell(firebase --version 2>&1)"
+    ]
+  }
+}
