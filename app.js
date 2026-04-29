@@ -263,7 +263,7 @@ function renderScorecard() {
     html += '<div class="scorecard-scroll"><table><thead>';
     html += `<tr><th style="text-align:left">Hole</th>`;
     for (let h = 0; h < round.holes; h++) html += `<th>${h + 1}</th>`;
-    html += `<th rowspan="${statSpan}" style="vertical-align:middle">🍺</th><th rowspan="${statSpan}" style="vertical-align:middle">Raw</th><th rowspan="${statSpan}" style="vertical-align:middle">Adj</th></tr>`;
+    html += `<th rowspan="${statSpan}" style="vertical-align:middle">🍺</th><th rowspan="${statSpan}" style="vertical-align:middle" title="Times meated">🥩↓</th><th rowspan="${statSpan}" style="vertical-align:middle" title="Times you planted">🥩↑</th><th rowspan="${statSpan}" style="vertical-align:middle">Raw</th><th rowspan="${statSpan}" style="vertical-align:middle">Adj</th></tr>`;
     html += `<tr><th style="text-align:left;color:#8aaa8a;font-weight:400">Par</th>`;
     for (let h = 0; h < round.holes; h++) html += `<th>${round.pars[h] || 4}</th>`;
     html += '</tr>';
@@ -320,6 +320,19 @@ function renderScorecard() {
         html += `<td>🍺 ${pd?.beers || 0}</td>`;
       }
 
+      // Meat inputs
+      if (isEditor && participated) {
+        html += `<td><input type="number" class="meat-input" min="0" max="20"
+          data-round="${round.id}" data-player="${player.id}" data-field="meats"
+          value="${pd?.meats || 0}" title="Times meated" /></td>`;
+        html += `<td><input type="number" class="meat-input" min="0" max="20"
+          data-round="${round.id}" data-player="${player.id}" data-field="meatPlants"
+          value="${pd?.meatPlants || 0}" title="Times you planted" /></td>`;
+      } else {
+        html += `<td>${pd?.meats > 0 ? '🥩 ' + pd.meats : '-'}</td>`;
+        html += `<td>${pd?.meatPlants > 0 ? '🥩 ' + pd.meatPlants : '-'}</td>`;
+      }
+
       html += `<td>${result ? result.rawTotal : '-'}</td>`;
       html += `<td style="font-weight:600">${result ? result.adjustedTotal : '-'}</td>`;
       html += '</tr>';
@@ -374,6 +387,16 @@ function renderScorecard() {
     });
   });
 
+  container.querySelectorAll('.meat-input').forEach(input => {
+    input.addEventListener('change', (e) => {
+      if (!isEditor) return;
+      const { round, player, field } = e.target.dataset;
+      ensureScoreData(round, player);
+      state.rounds.find(r => r.id === round).scores[player][field] = parseInt(e.target.value) || 0;
+      persist();
+    });
+  });
+
   container.querySelectorAll('.participate-check').forEach(cb => {
     cb.addEventListener('change', (e) => {
       if (!isEditor) return;
@@ -407,7 +430,7 @@ function ensureScoreData(roundId, playerId) {
   if (!round) return;
   if (!round.scores) round.scores = {};
   if (!round.scores[playerId]) {
-    round.scores[playerId] = { holes: new Array(round.holes).fill(null), beers: 0, participated: true };
+    round.scores[playerId] = { holes: new Array(round.holes).fill(null), beers: 0, meats: 0, meatPlants: 0, participated: true };
   }
 }
 

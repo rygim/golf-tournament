@@ -510,6 +510,28 @@ export const RULES_LIBRARY = [
     type: 'hole',
     apply: ({ score }) => score === 10 ? { modifier: 0, label: '🍺 Perfect 10 beer!', beerBonus: 1 } : null,
   },
+  {
+    id: 'meat-victim',
+    name: 'Meated',
+    description: 'Someone snuck a meat stick into your pocket? +1 stroke per stick found. Embarrassing.',
+    category: 'fun',
+    type: 'round',
+    apply: ({ meats }) => {
+      const m = meats || 0;
+      return m > 0 ? { modifier: m, label: `Meated +${m}` } : null;
+    },
+  },
+  {
+    id: 'meat-planter',
+    name: 'Meat Planter',
+    description: 'Successfully snuck a meat stick into someone\'s pocket? -1 stroke per plant. Diabolical.',
+    category: 'fun',
+    type: 'round',
+    apply: ({ meatPlants }) => {
+      const m = meatPlants || 0;
+      return m > 0 ? { modifier: -m, label: `Meat Planter -${m}` } : null;
+    },
+  },
 ];
 
 /**

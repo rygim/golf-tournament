@@ -50,6 +50,8 @@ export function calculateRoundScore(round, playerId, holeRuleOverrides = {}) {
     roundNumber: null,
     holesPlayed: holes.filter(h => h > 0).length,
     beers: (playerData.beers || 0) + beerBonuses,
+    meats: playerData.meats || 0,
+    meatPlants: playerData.meatPlants || 0,
     holeScores: holes,
     pars,
     isBestScore: false, // will be set externally if needed
