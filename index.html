@@ -46,7 +46,6 @@
     tr:hover td { background: #152015; }
     .score-input { width: 40px; text-align: center; padding: 0.2rem; }
     .beer-input { width: 50px; text-align: center; padding: 0.2rem; }
-    .meat-input { width: 40px; text-align: center; padding: 0.2rem; }
     .rule-badge { display: inline-block; padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.7rem; font-weight: 600; margin: 0.1rem; }
     .rule-badge.bonus { background: #2d5a2d; color: #8fdf8f; }
     .rule-badge.penalty { background: #5a2d2d; color: #df8f8f; }
@@ -80,12 +79,22 @@
     .award-detail { font-size: 0.8rem; color: #6a8a6a; margin-top: 0.2rem; }
     .award-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 0.75rem; }
     @media (max-width: 768px) {
+      body { overflow: auto; }
+      a[href="/"] { padding: 10px 16px; }
+      .btn { min-height: 44px; }
+      .app { padding: 0.5rem; }
       .form-row { flex-direction: column; }
       .header { flex-direction: column; align-items: flex-start; }
+      .card { padding: .8rem; }
+      .scorecard-scroll { overflow-x: auto; }
+      .form-row { flex-wrap: wrap; }
+      table { display: block; overflow-x: auto; }
+      .award-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
+  <a href="/" style="display:block;padding:6px 16px;background:#111;color:#7a8a9a;font-size:12px;text-decoration:none;font-family:system-ui,sans-serif;border-bottom:1px solid #222">← rgimmy.com</a>
   <div class="app">
     <div class="header">
       <div>
@@ -100,6 +109,7 @@
     <div class="tabs" role="tablist">
       <button class="tab active" data-tab="standings" role="tab">Standings</button>
       <button class="tab" data-tab="scorecard" role="tab">Scorecard</button>
+      <button class="tab" data-tab="holeguide" role="tab">⛳ Hole Guide</button>
       <button class="tab" data-tab="awards" role="tab">🏆 Awards</button>
       <button class="tab" data-tab="rules" role="tab">Rules Library</button>
       <button class="tab" data-tab="setup" role="tab">Setup</button>
@@ -111,6 +121,10 @@
 
     <div id="scorecard-panel" class="panel" role="tabpanel">
       <div id="scorecard-content"><p class="empty-state">Set up a tournament first.</p></div>
+    </div>
+
+    <div id="holeguide-panel" class="panel" role="tabpanel">
+      <div id="holeguide-content"><p class="empty-state">Set up a round first.</p></div>
     </div>
 
     <div id="rules-panel" class="panel" role="tabpanel">
@@ -128,6 +142,6 @@
     <div class="toast" id="toast"></div>
   </div>
 
-  <script type="module" src="app.js"></script>
+  <script type="module" src="app.js?v=20260430b"></script>
 </body>
 </html>

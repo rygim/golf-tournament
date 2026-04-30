@@ -39,34 +39,52 @@ export async function initFirestore(firebaseApp) {
 }
 
 /**
- * Check if a user email is in the editors allowlist.
- * Tries Firestore first; falls back to .golf-editors.json for local dev.
+ * Check if a user email is in the editors allowlist
  */
 export async function isAllowedEditor(email) {
-  if (!email) return false;
-
-  if (_firestore && _firestoreModules) {
-    try {
-      const { doc, getDoc } = _firestoreModules;
-      const snap = await getDoc(doc(_firestore, EDITORS_DOC));
-      if (snap.exists()) {
-        return (snap.data().emails || []).includes(email.toLowerCase());
-      }
-    } catch (e) {
-      console.warn('Could not check editor allowlist:', e);
-    }
-  }
-
-  // Local dev fallback: .golf-editors.json (gitignored)
+  if (!_firestore || !_firestoreModules || !email) return false;
   try {
-    const resp = await fetch('/.golf-editors.json');
-    if (resp.ok) {
-      const data = await resp.json();
-      return (data.emails || []).includes(email.toLowerCase());
-    }
-  } catch (e) { /* file not present */ }
+    const { doc, getDoc } = _firestoreModules;
+    const snap = await getDoc(doc(_firestore, EDITORS_DOC));
+    if (!snap.exists()) return false;
+    const data = snap.data();
+    const emails = data.emails || [];
+    return emails.includes(email.toLowerCase());
+  } catch (e) {
+    console.warn('Could not check editor allowlist:', e);
+    return false;
+  }
+}
 
-  return false;
+/**
+ * Get the current list of editor emails
+ */
+export async function getEditorEmails() {
+  if (!_firestore || !_firestoreModules) return [];
+  try {
+    const { doc, getDoc } = _firestoreModules;
+    const snap = await getDoc(doc(_firestore, EDITORS_DOC));
+    if (!snap.exists()) return [];
+    return snap.data().emails || [];
+  } catch (e) {
+    console.warn('Could not load editor list:', e);
+    return [];
+  }
+}
+
+/**
+ * Save the editor email list
+ */
+export async function setEditorEmails(emails) {
+  if (!_firestore || !_firestoreModules) return false;
+  try {
+    const { doc, setDoc } = _firestoreModules;
+    await setDoc(doc(_firestore, EDITORS_DOC), { emails });
+    return true;
+  } catch (e) {
+    console.warn('Could not save editor list:', e);
+    return false;
+  }
 }
 
 /**
@@ -106,6 +124,28 @@ export async function saveState(state) {
     } catch (e) {
       console.warn('Firestore save failed (permission denied or offline):', e.code || e.message);
     }
+  }
+}
+
+/**
+ * Subscribe to real-time state updates from Firestore.
+ * Calls onChange(newState) whenever another client saves.
+ * Returns an unsubscribe function.
+ */
+export function listenToState(onChange) {
+  if (!_firestore || !_firestoreModules) return null;
+  try {
+    const { doc, onSnapshot } = _firestoreModules;
+    return onSnapshot(doc(_firestore, TOURNAMENT_DOC), (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        _saveToLocalStorage(data);
+        if (onChange) onChange(data);
+      }
+    });
+  } catch (e) {
+    console.warn('Real-time listener failed:', e);
+    return null;
   }
 }
 

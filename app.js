@@ -1,13 +1,8 @@
-import { loadState, saveState, nextId, exportState, importState, initFirestore, isAllowedEditor } from './state.js';
-import { RULES_LIBRARY, RULE_CATEGORIES } from './rules.js';
-import { calculateStandings, calculateRoundScore } from './scoring.js';
-import { exportToExcel } from './excel-export.js';
-import { computeAwards } from './awards.js';
-import { API_KEY, setApiKey, searchCourses, searchCoursesOpenGolf, getCourseDetailOpenGolf } from './courseapi.js';
-
-// Set to true to bypass auth for local development. Never deploy with this on.
-const DEV_MODE_EDITOR = false;
-const GCAPI_KEY_STORAGE = 'golf-gcapi-key';
+import { loadState, saveState, nextId, exportState, importState, initFirestore, isAllowedEditor, getEditorEmails, setEditorEmails, listenToState } from './state.js?v=20260430b';
+import { RULES_LIBRARY, RULE_CATEGORIES } from './rules.js?v=20260430b';
+import { calculateStandings, calculateRoundScore } from './scoring.js?v=20260430b';
+import { exportToExcel } from './excel-export.js?v=20260430b';
+import { computeAwards } from './awards.js?v=20260430b';
 
 let state = null;
 let isAuthenticated = false;
@@ -42,9 +37,7 @@ async function initAuth() {
     }
 
     if (!firebaseConfig.apiKey) {
-      isEditor = DEV_MODE_EDITOR;
       renderAuthBar(null, null, null);
-      renderAll();
       return;
     }
 
@@ -55,14 +48,45 @@ async function initAuth() {
     state = await loadState();
     renderAll();
 
+    // Real-time listener for live updates from other users
+    listenToState((newState) => {
+      // Save UI state
+      const openDetails = [];
+      document.querySelectorAll('details[open]').forEach(d => {
+        const summary = d.querySelector('summary');
+        if (summary) openDetails.push(summary.textContent.trim());
+      });
+      const holeSelects = {};
+      document.querySelectorAll('.hole-override-select').forEach(s => {
+        holeSelects[s.dataset.round] = s.value;
+      });
+
+      state = newState;
+      renderAll();
+
+      // Restore UI state
+      if (openDetails.length > 0) {
+        document.querySelectorAll('details').forEach(d => {
+          const summary = d.querySelector('summary');
+          if (summary && openDetails.includes(summary.textContent.trim())) {
+            d.open = true;
+          }
+        });
+      }
+      Object.entries(holeSelects).forEach(([roundId, val]) => {
+        const sel = document.querySelector(`.hole-override-select[data-round="${roundId}"]`);
+        if (sel) { sel.value = val; sel.dispatchEvent(new Event('change')); }
+      });
+    });
+
     const auth = getAuth(app);
 
     onAuthStateChanged(auth, async (user) => {
       currentUser = user;
       isAuthenticated = !!user;
-      isEditor = DEV_MODE_EDITOR;
+      isEditor = false;
 
-      if (!DEV_MODE_EDITOR && user && user.email) {
+      if (user && user.email) {
         isEditor = await isAllowedEditor(user.email);
       }
 
@@ -73,9 +97,7 @@ async function initAuth() {
     renderAuthBar(auth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, signOut);
   } catch (e) {
     console.warn('Firebase auth not available, running in view-only mode', e);
-    isEditor = DEV_MODE_EDITOR;
     renderAuthBar(null, null, null, null, null);
-    renderAll();
   }
 }
 
@@ -131,8 +153,34 @@ function toast(msg) {
 
 // === Persist helper ===
 async function persist() {
+  // Save UI state before re-render
+  const openDetails = [];
+  document.querySelectorAll('details[open]').forEach(d => {
+    const summary = d.querySelector('summary');
+    if (summary) openDetails.push(summary.textContent.trim());
+  });
+  const holeSelects = {};
+  document.querySelectorAll('.hole-override-select').forEach(s => {
+    holeSelects[s.dataset.round] = s.value;
+  });
+
   await saveState(state);
   renderAll();
+
+  // Restore UI state after re-render
+  if (openDetails.length > 0) {
+    document.querySelectorAll('details').forEach(d => {
+      const summary = d.querySelector('summary');
+      if (summary && openDetails.includes(summary.textContent.trim())) {
+        d.open = true;
+      }
+    });
+  }
+  // Restore hole selects and trigger re-render of override rules
+  Object.entries(holeSelects).forEach(([roundId, val]) => {
+    const sel = document.querySelector(`.hole-override-select[data-round="${roundId}"]`);
+    if (sel) { sel.value = val; sel.dispatchEvent(new Event('change')); }
+  });
 }
 
 // === RENDER: Standings ===
@@ -257,22 +305,12 @@ function renderScorecard() {
         </div>
       </div>`;
 
-    // Three-row header: Hole / Par / Distance
-    const hasYardages = round.yardages?.some(y => y > 0);
-    const statSpan = hasYardages ? 3 : 2;
-    html += '<div class="scorecard-scroll"><table><thead>';
-    html += `<tr><th style="text-align:left">Hole</th>`;
-    for (let h = 0; h < round.holes; h++) html += `<th>${h + 1}</th>`;
-    html += `<th rowspan="${statSpan}" style="vertical-align:middle">🍺</th><th rowspan="${statSpan}" style="vertical-align:middle" title="Times meated">🥩↓</th><th rowspan="${statSpan}" style="vertical-align:middle" title="Times you planted">🥩↑</th><th rowspan="${statSpan}" style="vertical-align:middle">Raw</th><th rowspan="${statSpan}" style="vertical-align:middle">Adj</th></tr>`;
-    html += `<tr><th style="text-align:left;color:#8aaa8a;font-weight:400">Par</th>`;
-    for (let h = 0; h < round.holes; h++) html += `<th>${round.pars[h] || 4}</th>`;
-    html += '</tr>';
-    if (hasYardages) {
-      html += `<tr><th style="text-align:left;color:#5a7a5a;font-weight:400">Dist.</th>`;
-      for (let h = 0; h < round.holes; h++) html += `<th style="color:#5a7a5a;font-weight:400">${round.yardages[h] || '—'}</th>`;
-      html += '</tr>';
+    // Par row header
+    html += '<div class="scorecard-scroll"><table><thead><tr><th>Player</th>';
+    for (let h = 0; h < round.holes; h++) {
+      html += `<th>H${h + 1}<br><span style="font-size:0.65rem;color:#6a8a6a">P${round.pars[h] || 4}</span></th>`;
     }
-    html += '</thead><tbody>';
+    html += '<th>🍺</th><th>Raw</th><th>Adj</th></tr></thead><tbody>';
 
     state.players.forEach(player => {
       const pd = round.scores?.[player.id];
@@ -281,15 +319,14 @@ function renderScorecard() {
 
       html += `<tr><td style="text-align:left;white-space:nowrap">`;
 
-      const teeBadge = pd?.tee_name ? `<span style="font-size:0.65rem;color:#6a8a6a;margin-left:0.3rem">${pd.tee_name}</span>` : '';
       if (isEditor) {
         const checked = participated ? 'checked' : '';
         html += `<label style="display:inline;font-size:0.85rem;color:#d4e8d4">
           <input type="checkbox" class="participate-check" data-round="${round.id}" data-player="${player.id}" ${checked} style="margin-right:4px" />
           ${player.name}
-        </label>${teeBadge}`;
+        </label>`;
       } else {
-        html += `${player.name}${teeBadge}${!participated ? ' <span style="color:#5a7a5a;font-size:0.7rem">(DNP)</span>' : ''}`;
+        html += `${player.name}${!participated ? ' <span style="color:#5a7a5a;font-size:0.7rem">(DNP)</span>' : ''}`;
       }
       html += '</td>';
 
@@ -303,7 +340,7 @@ function renderScorecard() {
         else if (scoreNum === par) cellStyle = 'color:#d4e8d4';
 
         if (isEditor && participated) {
-          html += `<td><input type="number" class="score-input" min="1" max="20"
+          html += `<td><input type="number" class="score-input" min="1" max="20" inputmode="numeric" pattern="[0-9]*"
             data-round="${round.id}" data-player="${player.id}" data-hole="${h}"
             value="${score || ''}" /></td>`;
         } else {
@@ -313,24 +350,11 @@ function renderScorecard() {
 
       // Beer input
       if (isEditor && participated) {
-        html += `<td><input type="number" class="beer-input" min="0" max="30"
+        html += `<td><input type="number" class="beer-input" min="0" max="30" inputmode="numeric" pattern="[0-9]*"
           data-round="${round.id}" data-player="${player.id}" data-field="beers"
           value="${pd?.beers || 0}" /></td>`;
       } else {
         html += `<td>🍺 ${pd?.beers || 0}</td>`;
-      }
-
-      // Meat inputs
-      if (isEditor && participated) {
-        html += `<td><input type="number" class="meat-input" min="0" max="20"
-          data-round="${round.id}" data-player="${player.id}" data-field="meats"
-          value="${pd?.meats || 0}" title="Times meated" /></td>`;
-        html += `<td><input type="number" class="meat-input" min="0" max="20"
-          data-round="${round.id}" data-player="${player.id}" data-field="meatPlants"
-          value="${pd?.meatPlants || 0}" title="Times you planted" /></td>`;
-      } else {
-        html += `<td>${pd?.meats > 0 ? '🥩 ' + pd.meats : '-'}</td>`;
-        html += `<td>${pd?.meatPlants > 0 ? '🥩 ' + pd.meatPlants : '-'}</td>`;
       }
 
       html += `<td>${result ? result.rawTotal : '-'}</td>`;
@@ -342,22 +366,21 @@ function renderScorecard() {
 
     // Per-hole rule overrides (for editors)
     if (isEditor) {
-      html += '<details style="margin-top:0.5rem"><summary style="cursor:pointer;font-size:0.8rem;color:#6a8a6a">⚙️ Per-hole rule overrides</summary>';
-      html += '<div style="margin-top:0.5rem;font-size:0.75rem">';
-      const holeRules = RULES_LIBRARY.filter(r => r.type === 'hole');
+      html += `<details style="margin-top:0.5rem"><summary style="cursor:pointer;font-size:0.85rem;color:#6a8a6a;padding:0.4rem 0">⚙️ Per-hole rule overrides</summary>`;
+      html += `<div style="margin-top:0.5rem">`;
+      html += `<div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.5rem;flex-wrap:wrap">`;
+      html += `<label style="font-size:0.85rem;color:#8fdf8f">Hole:</label>`;
+      html += `<select class="hole-override-select" data-round="${round.id}" style="background:#0f1a0f;color:#d4e8d4;border:1px solid #2a4a2a;border-radius:4px;padding:0.4rem;font-size:0.9rem">`;
       for (let h = 0; h < round.holes; h++) {
         const overrideKey = `${round.id}-${h}`;
-        const currentOverrides = state.holeRuleOverrides[overrideKey] || null;
-        html += `<div style="margin-bottom:0.3rem"><span style="color:#8aaa8a">H${h + 1}:</span> `;
-        holeRules.forEach(rule => {
-          const isActive = currentOverrides ? currentOverrides.includes(rule.id) : round.activeRules.includes(rule.id);
-          html += `<span class="rule-chip ${isActive ? 'selected' : ''}"
-            data-override-round="${round.id}" data-override-hole="${h}" data-override-rule="${rule.id}"
-            title="${rule.description}">${rule.name}</span> `;
-        });
-        html += '</div>';
+        const hasOverride = !!state.holeRuleOverrides[overrideKey];
+        html += `<option value="${h}">H${h + 1} (Par ${round.pars[h] || 4})${hasOverride ? ' ✏️' : ''}</option>`;
       }
-      html += '</div></details>';
+      html += `</select>`;
+      html += `<button class="btn btn-small btn-secondary hole-override-reset" data-round="${round.id}">↺ Reset to Round Default</button>`;
+      html += `</div>`;
+      html += `<div class="hole-override-rules" data-round="${round.id}" style="display:flex;flex-direction:column;gap:0.3rem"></div>`;
+      html += `</div></details>`;
     }
 
     html += '</div>';
@@ -387,16 +410,6 @@ function renderScorecard() {
     });
   });
 
-  container.querySelectorAll('.meat-input').forEach(input => {
-    input.addEventListener('change', (e) => {
-      if (!isEditor) return;
-      const { round, player, field } = e.target.dataset;
-      ensureScoreData(round, player);
-      state.rounds.find(r => r.id === round).scores[player][field] = parseInt(e.target.value) || 0;
-      persist();
-    });
-  });
-
   container.querySelectorAll('.participate-check').forEach(cb => {
     cb.addEventListener('change', (e) => {
       if (!isEditor) return;
@@ -407,20 +420,68 @@ function renderScorecard() {
     });
   });
 
-  container.querySelectorAll('.rule-chip[data-override-round]').forEach(chip => {
-    chip.addEventListener('click', () => {
+  // Per-hole override UI — hole selector + rule toggles
+  container.querySelectorAll('.hole-override-select').forEach(select => {
+    function renderOverrideRules() {
+      const roundId = select.dataset.round;
+      const holeIdx = parseInt(select.value);
+      const round = state.rounds.find(r => String(r.id) === String(roundId));
+      if (!round) return;
+      const rulesDiv = container.querySelector(`.hole-override-rules[data-round="${roundId}"]`);
+      if (!rulesDiv) return;
+      const overrideKey = `${roundId}-${holeIdx}`;
+      const currentOverrides = state.holeRuleOverrides[overrideKey] || null;
+      const effectiveRules = currentOverrides || round.activeRules || [];
+      const holeRules = RULES_LIBRARY.filter(r => r.type === 'hole');
+
+      rulesDiv.innerHTML = holeRules.map(rule => {
+        const isActive = effectiveRules.includes(rule.id);
+        return `<div style="display:flex;align-items:center;gap:0.5rem;padding:0.5rem;background:${isActive ? '#1a2e1a' : '#0f1a0f'};border:1px solid ${isActive ? '#2d5a2d' : '#1a2e1a'};border-radius:6px;cursor:pointer;min-height:44px" class="hole-rule-toggle" data-round="${roundId}" data-hole="${holeIdx}" data-rule="${rule.id}">
+          <span style="font-size:1.2rem;min-width:28px;text-align:center">${isActive ? '✅' : '⬜'}</span>
+          <div style="flex:1"><div style="font-size:0.85rem;font-weight:600;color:${isActive ? '#6ecf6e' : '#8aaa8a'}">${rule.name}</div><div style="font-size:0.75rem;color:#6a8a6a">${rule.description}</div></div>
+        </div>`;
+      }).join('');
+
+      // Bind toggle clicks
+      rulesDiv.querySelectorAll('.hole-rule-toggle').forEach(toggle => {
+        toggle.addEventListener('click', () => {
+          if (!isEditor) return;
+          const rId = toggle.dataset.round;
+          const hIdx = parseInt(toggle.dataset.hole);
+          const ruleId = toggle.dataset.rule;
+          const key = `${rId}-${hIdx}`;
+          const rd = state.rounds.find(r => String(r.id) === String(rId));
+          if (!state.holeRuleOverrides[key]) {
+            state.holeRuleOverrides[key] = [...(rd?.activeRules || [])];
+          }
+          const arr = state.holeRuleOverrides[key];
+          const idx = arr.indexOf(ruleId);
+          if (idx >= 0) arr.splice(idx, 1);
+          else arr.push(ruleId);
+          persist();
+          renderOverrideRules();
+        });
+      });
+    }
+
+    select.addEventListener('change', renderOverrideRules);
+    renderOverrideRules(); // initial render
+  });
+
+  // Reset hole override to round default
+  container.querySelectorAll('.hole-override-reset').forEach(btn => {
+    btn.addEventListener('click', () => {
       if (!isEditor) return;
-      const { overrideRound, overrideHole, overrideRule } = chip.dataset;
-      const key = `${overrideRound}-${overrideHole}`;
-      const round = state.rounds.find(r => r.id === overrideRound);
-      if (!state.holeRuleOverrides[key]) {
-        state.holeRuleOverrides[key] = [...(round?.activeRules || [])];
-      }
-      const arr = state.holeRuleOverrides[key];
-      const idx = arr.indexOf(overrideRule);
-      if (idx >= 0) arr.splice(idx, 1);
-      else arr.push(overrideRule);
+      const roundId = btn.dataset.round;
+      const select = container.querySelector(`.hole-override-select[data-round="${roundId}"]`);
+      if (!select) return;
+      const holeIdx = parseInt(select.value);
+      const key = `${roundId}-${holeIdx}`;
+      delete state.holeRuleOverrides[key];
       persist();
+      toast(`Hole ${holeIdx + 1} reset to round defaults`);
+      // Re-render the rules for this hole
+      select.dispatchEvent(new Event('change'));
     });
   });
 }
@@ -430,7 +491,7 @@ function ensureScoreData(roundId, playerId) {
   if (!round) return;
   if (!round.scores) round.scores = {};
   if (!round.scores[playerId]) {
-    round.scores[playerId] = { holes: new Array(round.holes).fill(null), beers: 0, meats: 0, meatPlants: 0, participated: true };
+    round.scores[playerId] = { holes: new Array(round.holes).fill(null), beers: 0, participated: true };
   }
 }
 
@@ -545,6 +606,18 @@ function renderSetup() {
     </div>
   </div>`;
 
+  // Admin management
+  html += `<div class="card"><h3>👥 Editor Access</h3>
+    <p style="font-size:0.75rem;color:#6a8a6a;margin-bottom:0.5rem">Editors can modify tournament settings, enter scores, and manage players. Add email addresses of people who should have editor access.</p>
+    <div id="editor-list" style="margin-bottom:0.5rem"><p style="font-size:0.8rem;color:#6a8a6a">Loading editors...</p></div>
+    <div class="form-row">
+      <div class="form-group"><label>Add Editor Email</label>
+        <input type="email" id="new-editor-email" placeholder="email@example.com" style="width:250px" />
+      </div>
+      <button class="btn btn-primary btn-small" id="add-editor-btn">Add Editor</button>
+    </div>
+  </div>`;
+
   // Players
   html += `<div class="card"><h3>Players (${state.players.length})</h3>
     <div class="form-row">
@@ -572,19 +645,8 @@ function renderSetup() {
   // Rounds
   html += `<div class="card"><h3>Rounds (${state.rounds.length})</h3>
     <div style="margin-bottom:0.75rem;padding-bottom:0.75rem;border-bottom:1px solid #2a4a2a">
-      <label style="font-size:0.9rem;color:#8fdf8f;font-weight:600">⛳ Search Golf Course</label>
-      <div style="margin:0.3rem 0 0.5rem;padding:0.4rem 0.6rem;background:#0a140a;border-radius:4px">
-        <label style="font-size:0.8rem;color:#a0c8a0">GolfCourseAPI Key <a href="https://golfcourseapi.com" target="_blank" rel="noopener" style="font-size:0.75rem;color:#6a8a6a">(free key at golfcourseapi.com)</a></label>
-        <div style="display:flex;gap:0.5rem;align-items:center;margin-top:0.25rem;flex-wrap:wrap">
-          <input type="text" id="gcapi-key-input" placeholder="Paste API key here" value="${API_KEY}" style="width:280px;font-family:monospace;font-size:0.78rem" />
-          <button class="btn btn-secondary btn-small" id="gcapi-key-save-btn">Save Key</button>
-          ${API_KEY ? '<button class="btn btn-secondary btn-small" id="gcapi-key-clear-btn">Clear (use OpenGolfAPI instead)</button>' : ''}
-        </div>
-        <p style="font-size:0.75rem;color:#6a8a6a;margin:0.3rem 0 0">${API_KEY
-          ? '&#10003; Using <strong style="color:#8fdf8f">GolfCourseAPI</strong> — full tee &amp; yardage data per hole.'
-          : 'No key set — using <a href="https://opengolfapi.org" target="_blank" rel="noopener">OpenGolfAPI</a> (basic pars only, no tee selection).'
-        }</p>
-      </div>
+      <label style="font-size:0.9rem;color:#8fdf8f;font-weight:600">⛳ Search Golf Course (OpenGolfAPI)</label>
+      <p style="font-size:0.75rem;color:#6a8a6a;margin:0.2rem 0 0.4rem">Search for a course to auto-fill pars and course info. <a href="https://opengolfapi.org" target="_blank" rel="noopener">Data from OpenGolfAPI (ODbL)</a></p>
       <div class="form-row">
         <div class="form-group"><label>Course Name or City</label>
           <input type="text" id="course-search-input" placeholder="e.g. Pebble Beach, Augusta" style="width:250px" />
@@ -610,18 +672,17 @@ function renderSetup() {
     const courseInfo = round.courseInfo;
     let courseHtml = '';
     if (courseInfo) {
-      const displayName = courseInfo.course_name || courseInfo.club_name || courseInfo.name || '';
-      const par = courseInfo.par_total || courseInfo.par || '?';
-      const teeLabel = courseInfo.tee_name ? ` · ${courseInfo.tee_name} tees` : '';
-      const yardsLabel = courseInfo.total_yards ? ` · ${courseInfo.total_yards} yds` : '';
-      const ratingLabel = courseInfo.course_rating ? ` · ${courseInfo.course_rating}/${courseInfo.slope_rating}` : '';
       courseHtml = `<div style="margin-bottom:0.5rem;padding:0.4rem 0.6rem;background:#0a140a;border-radius:4px;font-size:0.8rem">
         <div style="display:flex;justify-content:space-between;align-items:start;gap:0.5rem;flex-wrap:wrap">
           <div>
-            <strong style="color:#8fdf8f">⛳ ${displayName}</strong>
-            <div style="color:#6a8a6a">${courseInfo.city || ''}${courseInfo.state ? ', ' + courseInfo.state : ''} · Par ${par}${teeLabel}${yardsLabel}${ratingLabel}</div>
+            <strong style="color:#8fdf8f">⛳ ${courseInfo.name || ''}</strong>
+            <div style="color:#6a8a6a">${courseInfo.city || ''}${courseInfo.state ? ', ' + courseInfo.state : ''} · ${courseInfo.type || ''} · Par ${courseInfo.par || '?'}${courseInfo.year_built ? ' · Est. ' + courseInfo.year_built : ''}</div>
+            ${courseInfo.phone ? `<div style="color:#6a8a6a">📞 ${courseInfo.phone}</div>` : ''}
           </div>
-          ${courseInfo.latitude ? `<div><a href="https://www.google.com/maps?q=${courseInfo.latitude},${courseInfo.longitude}" target="_blank" rel="noopener" class="btn btn-secondary btn-small">📍 Map</a></div>` : ''}
+          <div style="display:flex;gap:0.3rem;flex-wrap:wrap">
+            ${courseInfo.website ? `<a href="${courseInfo.website}" target="_blank" rel="noopener" class="btn btn-secondary btn-small">🌐 Website</a>` : ''}
+            ${courseInfo.latitude ? `<a href="https://www.google.com/maps?q=${courseInfo.latitude},${courseInfo.longitude}" target="_blank" rel="noopener" class="btn btn-secondary btn-small">📍 Map</a>` : ''}
+          </div>
         </div>
       </div>`;
     }
@@ -643,25 +704,48 @@ function renderSetup() {
             <option value="5">All Par 5</option>
           </select>
         </div>
-        ${round.yardages?.some(y => y > 0) ? `<div style="font-size:0.75rem;color:#6a8a6a;margin-top:0.2rem">Yardages: ${round.yardages.join(', ')}</div>` : ''}
       </div>
-      ${round.courseInfo?.tees?.length ? `<div style="margin-top:0.5rem;padding-top:0.5rem;border-top:1px solid #1a2e1a">
-        <label style="font-size:0.8rem;color:#8fdf8f;font-weight:600">Player Tees</label>
-        <div style="margin-top:0.3rem">
-          ${state.players.map(p => {
-            const teeVal = round.scores?.[p.id]?.tee_name || '';
-            return `<div style="display:flex;align-items:center;gap:0.5rem;padding:0.15rem 0">
-              <span style="min-width:110px;font-size:0.82rem">${p.name}</span>
-              <select class="player-tee-select" data-round="${round.id}" data-player="${p.id}">
-                <option value="">— choose tee —</option>
-                ${round.courseInfo.tees.map(t => `<option value="${t.tee_name}" ${teeVal === t.tee_name ? 'selected' : ''}>${t.tee_name} (${t.total_yards} yds${t.tee_gender === 'female' ? ', W' : ''})</option>`).join('')}
-              </select>
-            </div>`;
-          }).join('')}
+      <div style="margin-top:0.4rem">
+        <label>🏌️ Longest Drive & Closest to Pin Holes:</label>
+        <div class="form-row" style="margin-top:0.3rem">
+          <div class="form-group"><label style="font-size:0.75rem">LD Front 9</label>
+            <select class="ld-ctp-select" data-round="${round.id}" data-field="ldFront" style="width:100%">
+              <option value="">None</option>
+              ${Array.from({length: Math.min(round.holes, 9)}, (_, i) => `<option value="${i}"${(round.ldFront != null && round.ldFront == i) ? ' selected' : ''}>Hole ${i + 1} (Par ${round.pars[i] || 4})</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group"><label style="font-size:0.75rem">LD Back 9</label>
+            <select class="ld-ctp-select" data-round="${round.id}" data-field="ldBack" style="width:100%">
+              <option value="">None</option>
+              ${round.holes > 9 ? Array.from({length: round.holes - 9}, (_, i) => `<option value="${i + 9}"${(round.ldBack != null && round.ldBack == i + 9) ? ' selected' : ''}>Hole ${i + 10} (Par ${round.pars[i + 9] || 4})</option>`).join('') : ''}
+            </select>
+          </div>
+          <div class="form-group"><label style="font-size:0.75rem">CTP Front 9</label>
+            <select class="ld-ctp-select" data-round="${round.id}" data-field="ctpFront" style="width:100%">
+              <option value="">None</option>
+              ${Array.from({length: Math.min(round.holes, 9)}, (_, i) => `<option value="${i}"${(round.ctpFront != null && round.ctpFront == i) ? ' selected' : ''}>Hole ${i + 1} (Par ${round.pars[i] || 4})</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group"><label style="font-size:0.75rem">CTP Back 9</label>
+            <select class="ld-ctp-select" data-round="${round.id}" data-field="ctpBack" style="width:100%">
+              <option value="">None</option>
+              ${round.holes > 9 ? Array.from({length: round.holes - 9}, (_, i) => `<option value="${i + 9}"${(round.ctpBack != null && round.ctpBack == i + 9) ? ' selected' : ''}>Hole ${i + 10} (Par ${round.pars[i + 9] || 4})</option>`).join('') : ''}
+            </select>
+          </div>
         </div>
-      </div>` : ''}
+      </div>
       <div style="margin-top:0.4rem">
         <label>Active Rules for this Round:</label>
+        <div style="margin-bottom:0.4rem;display:flex;gap:0.3rem;flex-wrap:wrap">
+          <button class="btn btn-secondary btn-small random-rules-btn" data-round="${round.id}" data-count="3">🎲 Random 3</button>
+          <button class="btn btn-secondary btn-small random-rules-btn" data-round="${round.id}" data-count="5">🎲 Random 5</button>
+          <button class="btn btn-secondary btn-small random-rules-btn" data-round="${round.id}" data-count="8">🎲 Random 8</button>
+          <button class="btn btn-secondary btn-small preset-rules-btn" data-round="${round.id}" data-preset="chill">😎 Chill</button>
+          <button class="btn btn-secondary btn-small preset-rules-btn" data-round="${round.id}" data-preset="chaos">🔥 Chaos</button>
+          <button class="btn btn-secondary btn-small preset-rules-btn" data-round="${round.id}" data-preset="beer">🍺 Beer Focus</button>
+          <button class="btn btn-secondary btn-small preset-rules-btn" data-round="${round.id}" data-preset="competitive">🏆 Competitive</button>
+          <button class="btn btn-secondary btn-small clear-rules-btn" data-round="${round.id}">✕ Clear All</button>
+        </div>
         <div class="rule-selector">`;
 
     RULES_LIBRARY.forEach(rule => {
@@ -750,41 +834,23 @@ function attachSetupListeners() {
     // Attach pending course info if a course was selected
     if (window._pendingCourseInfo) {
       roundData.courseInfo = window._pendingCourseInfo;
-      if (window._pendingCourseInfo.pars?.length > 0) {
+      // Apply pars from course scorecard if available
+      if (window._pendingCourseInfo.pars && window._pendingCourseInfo.pars.length > 0) {
         roundData.pars = window._pendingCourseInfo.pars.slice(0, holes);
         while (roundData.pars.length < holes) roundData.pars.push(4);
       }
-      if (window._pendingCourseInfo.yardages?.length > 0) {
-        roundData.yardages = window._pendingCourseInfo.yardages.slice(0, holes);
-        while (roundData.yardages.length < holes) roundData.yardages.push(0);
-      }
       window._pendingCourseInfo = null;
+      window._pendingCoursePars = null;
     }
     state.rounds.push(roundData);
     document.getElementById('new-round-name').value = '';
     persist(); toast(`${name} added`);
   });
 
-  // GolfCourseAPI key
-  document.getElementById('gcapi-key-save-btn')?.addEventListener('click', () => {
-    const key = document.getElementById('gcapi-key-input')?.value.trim() || '';
-    if (key) localStorage.setItem(GCAPI_KEY_STORAGE, key);
-    else localStorage.removeItem(GCAPI_KEY_STORAGE);
-    setApiKey(key);
-    renderSetup();
-    toast(key ? 'API key saved — using GolfCourseAPI' : 'Key cleared — using OpenGolfAPI');
-  });
-  document.getElementById('gcapi-key-clear-btn')?.addEventListener('click', () => {
-    localStorage.removeItem(GCAPI_KEY_STORAGE);
-    setApiKey('');
-    renderSetup();
-    toast('Key cleared — using OpenGolfAPI');
-  });
-
   // Course search
-  document.getElementById('course-search-btn')?.addEventListener('click', handleCourseSearch);
+  document.getElementById('course-search-btn')?.addEventListener('click', searchCourses);
   document.getElementById('course-search-input')?.addEventListener('keydown', e => {
-    if (e.key === 'Enter') handleCourseSearch();
+    if (e.key === 'Enter') searchCourses();
   });
 
   document.querySelectorAll('.remove-round-btn').forEach(btn => {
@@ -821,16 +887,6 @@ function attachSetupListeners() {
     });
   });
 
-  document.querySelectorAll('.player-tee-select').forEach(select => {
-    select.addEventListener('change', () => {
-      if (!isEditor) return;
-      const { round: roundId, player: playerId } = select.dataset;
-      ensureScoreData(roundId, playerId);
-      state.rounds.find(r => r.id === roundId).scores[playerId].tee_name = select.value || null;
-      persist();
-    });
-  });
-
   document.querySelectorAll('.rule-chip[data-round-rule]').forEach(chip => {
     chip.addEventListener('click', () => {
       const round = state.rounds.find(r => r.id === chip.dataset.roundRule);
@@ -840,6 +896,60 @@ function attachSetupListeners() {
       if (idx >= 0) round.activeRules.splice(idx, 1);
       else round.activeRules.push(ruleId);
       persist();
+    });
+  });
+
+  // Random rules buttons
+  document.querySelectorAll('.random-rules-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const round = state.rounds.find(r => r.id === btn.dataset.round);
+      if (!round) return;
+      const count = parseInt(btn.dataset.count) || 5;
+      const shuffled = [...RULES_LIBRARY].sort(() => Math.random() - 0.5);
+      round.activeRules = shuffled.slice(0, count).map(r => r.id);
+      persist();
+      toast(`${count} random rules assigned`);
+    });
+  });
+
+  // Preset rule packs
+  document.querySelectorAll('.preset-rules-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const round = state.rounds.find(r => r.id === btn.dataset.round);
+      if (!round) return;
+      const preset = btn.dataset.preset;
+      const presets = {
+        chill: ['birdie-bonus', 'worst-hole-mulligan', 'par-streak', 'happy-hour', 'even-steven'],
+        chaos: ['double-bogey-tax', 'snowman-shame', 'lucky-seven', 'the-yo-yo', 'the-jinx', 'roller-coaster', 'palindrome-round', 'the-double-down'],
+        beer: ['beer-per-birdie', 'beer-handicap', 'sober-penalty', 'party-animal', 'two-beer-minimum', 'buzzkill', 'happy-hour', 'beer-bogey-combo', 'the-six-pack'],
+        competitive: ['birdie-bonus', 'eagle-jackpot', 'double-bogey-tax', 'consistency-bonus', 'par-streak', 'no-bogeys', 'front-nine-back-nine', 'comeback-kid']
+      };
+      round.activeRules = presets[preset] || [];
+      persist();
+      toast(`"${preset}" rules applied`);
+    });
+  });
+
+  // Clear all rules
+  document.querySelectorAll('.clear-rules-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const round = state.rounds.find(r => r.id === btn.dataset.round);
+      if (!round) return;
+      round.activeRules = [];
+      persist();
+      toast('Rules cleared');
+    });
+  });
+
+  // Longest Drive / Closest to Pin selects
+  document.querySelectorAll('.ld-ctp-select').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const round = state.rounds.find(r => String(r.id) === String(sel.dataset.round));
+      if (!round) return;
+      const field = sel.dataset.field;
+      round[field] = sel.value === '' ? null : parseInt(sel.value);
+      persist();
+      toast(`${field.includes('ld') ? 'Longest Drive' : 'Closest to Pin'} updated`);
     });
   });
 
@@ -877,6 +987,62 @@ function attachSetupListeners() {
       persist(); toast('Reset complete');
     }
   });
+
+  // --- Editor management ---
+  loadAndRenderEditors();
+
+  document.getElementById('add-editor-btn')?.addEventListener('click', async () => {
+    const input = document.getElementById('new-editor-email');
+    const email = input?.value.trim().toLowerCase();
+    if (!email || !email.includes('@')) { toast('Enter a valid email'); return; }
+    const editors = await getEditorEmails();
+    if (editors.includes(email)) { toast('Already an editor'); return; }
+    editors.push(email);
+    const ok = await setEditorEmails(editors);
+    if (ok) { toast(`${email} added as editor`); input.value = ''; loadAndRenderEditors(); }
+    else { toast('Failed to save — check permissions'); }
+  });
+
+  document.getElementById('new-editor-email')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('add-editor-btn')?.click();
+  });
+}
+
+async function loadAndRenderEditors() {
+  const listEl = document.getElementById('editor-list');
+  if (!listEl) return;
+  const editors = await getEditorEmails();
+  if (editors.length === 0) {
+    listEl.innerHTML = '<p style="font-size:0.8rem;color:#6a8a6a">No editors configured. Add one below.</p>';
+    return;
+  }
+  listEl.innerHTML = editors.map(email => `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:0.25rem 0;border-bottom:1px solid #1a2e1a;font-size:0.85rem">
+      <span>${email}${currentUser && currentUser.email && email === currentUser.email.toLowerCase() ? ' <span style="color:#6ecf6e;font-size:0.7rem">(you)</span>' : ''}</span>
+      <button class="btn btn-danger btn-small remove-editor-btn" data-email="${email}">✕</button>
+    </div>
+  `).join('');
+
+  listEl.querySelectorAll('.remove-editor-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const email = btn.dataset.email;
+      if (currentUser && currentUser.email && email === currentUser.email.toLowerCase()) {
+        if (!confirm('Remove yourself as editor? You will lose edit access.')) return;
+      }
+      const editors = await getEditorEmails();
+      const updated = editors.filter(e => e !== email);
+      const ok = await setEditorEmails(updated);
+      if (ok) {
+        toast(`${email} removed`);
+        if (currentUser && currentUser.email && email === currentUser.email.toLowerCase()) {
+          isEditor = false;
+          renderAll();
+        } else {
+          loadAndRenderEditors();
+        }
+      } else { toast('Failed to save'); }
+    });
+  });
 }
 
 // === RENDER: Awards Ceremony ===
@@ -911,8 +1077,8 @@ function renderAwards() {
 }
 
 // === Render All ===
-// --- Course Search (GolfCourseAPI with tee selection, or OpenGolfAPI fallback) ---
-async function handleCourseSearch() {
+// --- OpenGolfAPI Course Search ---
+async function searchCourses() {
   const input = document.getElementById('course-search-input');
   const resultsDiv = document.getElementById('course-search-results');
   const query = input?.value.trim();
@@ -921,209 +1087,291 @@ async function handleCourseSearch() {
   resultsDiv.innerHTML = '<p style="font-size:0.8rem;color:#6a8a6a">Searching...</p>';
 
   try {
-    let courses;
-    if (API_KEY) {
-      courses = await searchCourses(query);
-      window._courseSearchSource = 'golfcourseapi';
-    } else {
-      courses = await searchCoursesOpenGolf(query);
-      window._courseSearchSource = 'opengolfapi';
-    }
-    window._courseSearchResults = courses;
+    const resp = await fetch(`https://api.opengolfapi.org/v1/courses/search?q=${encodeURIComponent(query)}`);
+    if (!resp.ok) throw new Error('API error ' + resp.status);
+    const data = await resp.json();
+    const courses = data.courses || [];
 
     if (courses.length === 0) {
       resultsDiv.innerHTML = '<p style="font-size:0.8rem;color:#6a8a6a">No courses found. Try a different search.</p>';
       return;
     }
 
-    renderCourseResults(courses, resultsDiv);
+    resultsDiv.innerHTML = courses.slice(0, 15).map(c => `
+      <div class="course-result" data-course-id="${c.id}" style="display:flex;justify-content:space-between;align-items:center;padding:0.4rem 0.5rem;border-bottom:1px solid #1a2e1a;cursor:pointer;transition:background 0.1s" onmouseover="this.style.background='#1a2e1a'" onmouseout="this.style.background='transparent'">
+        <div>
+          <div style="font-weight:600;font-size:0.85rem">${c.course_name || c.club_name || 'Unknown'}</div>
+          <div style="font-size:0.75rem;color:#6a8a6a">${c.city || ''}${c.state ? ', ' + c.state : ''} · ${c.course_type || ''} · ${c.holes_count || '?'} holes · Par ${c.par_total || '?'}${c.year_built ? ' · ' + c.year_built : ''}</div>
+        </div>
+        <button class="btn btn-primary btn-small" data-select-course="${c.id}">Select</button>
+      </div>
+    `).join('');
+
+    // Bind select buttons
+    resultsDiv.querySelectorAll('[data-select-course]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const courseId = btn.dataset.selectCourse;
+        await selectCourse(courseId, courses.find(c => c.id === courseId));
+      });
+    });
   } catch (err) {
     resultsDiv.innerHTML = `<p style="font-size:0.8rem;color:#c0392b">Search failed: ${err.message}</p>`;
   }
 }
 
-function renderCourseResults(courses, resultsDiv) {
-  resultsDiv.innerHTML = courses.slice(0, 20).map(c => {
-    const name = c.club_name || c.course_name || 'Unknown';
-    const city = c.location?.city || c.city || '';
-    const state = c.location?.state || c.state || '';
-    const allTees = [...(c.tees?.male || []), ...(c.tees?.female || [])];
-    const numHoles = allTees[0]?.number_of_holes || c.holes_count || '?';
-    const par = allTees[0]?.par_total || c.par_total || '?';
-    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:0.4rem 0.5rem;border-bottom:1px solid #1a2e1a;gap:0.5rem">
-      <div>
-        <div style="font-weight:600;font-size:0.85rem">${name}</div>
-        <div style="font-size:0.75rem;color:#6a8a6a">${city}${state ? ', ' + state : ''} · ${numHoles} holes · Par ${par}</div>
-      </div>
-      <button class="btn btn-primary btn-small" data-select-course="${c.id}">Select</button>
-    </div>`;
-  }).join('');
+async function selectCourse(courseId, basicData) {
+  const resultsDiv = document.getElementById('course-search-results');
 
-  resultsDiv.querySelectorAll('[data-select-course]').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const courseId = btn.dataset.selectCourse;
-      const course = (window._courseSearchResults || []).find(c => String(c.id) === courseId);
-      if (!course) return;
-      if (window._courseSearchSource === 'golfcourseapi') {
-        renderTeeSelector(course, resultsDiv);
-      } else {
-        selectCourseOpenGolf(course, resultsDiv);
-      }
-    });
-  });
-}
-
-function renderTeeSelector(course, resultsDiv) {
-  const maleTees = course.tees?.male || [];
-  const femaleTees = course.tees?.female || [];
-  const courseName = course.club_name || course.course_name || 'Unknown Course';
-
-  function teeRow(tee, gender) {
-    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:0.35rem 0.5rem;border-bottom:1px solid #1a2e1a;gap:0.5rem">
-      <div>
-        <span style="font-weight:600;font-size:0.85rem">${tee.tee_name}</span>
-        <span style="font-size:0.75rem;color:#6a8a6a"> · ${tee.total_yards} yds · Par ${tee.par_total} · ${tee.course_rating}/${tee.slope_rating}</span>
-      </div>
-      <button class="btn btn-primary btn-small" data-tee-gender="${gender}" data-tee-name="${tee.tee_name}">Select</button>
-    </div>`;
-  }
-
-  let html = `<div style="background:#0a140a;border-radius:4px;padding:0.5rem">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.4rem">
-      <strong style="color:#8fdf8f;font-size:0.85rem">${courseName}</strong>
-      <button class="btn btn-secondary btn-small" id="tee-back-btn">← Back</button>
-    </div>
-    <p style="font-size:0.75rem;color:#6a8a6a;margin-bottom:0.4rem">${course.location?.city || ''}${course.location?.state ? ', ' + course.location.state : ''} · Choose tees:</p>`;
-
-  if (maleTees.length) {
-    html += `<div style="font-size:0.7rem;color:#8aaa8a;padding:0.2rem 0.5rem;background:#1a2e1a">Men's Tees</div>`;
-    html += maleTees.map(t => teeRow(t, 'male')).join('');
-  }
-  if (femaleTees.length) {
-    html += `<div style="font-size:0.7rem;color:#8aaa8a;padding:0.2rem 0.5rem;background:#1a2e1a;margin-top:0.25rem">Women's Tees</div>`;
-    html += femaleTees.map(t => teeRow(t, 'female')).join('');
-  }
-  html += '</div>';
-  resultsDiv.innerHTML = html;
-
-  document.getElementById('tee-back-btn')?.addEventListener('click', () => {
-    renderCourseResults(window._courseSearchResults || [], resultsDiv);
-  });
-
-  resultsDiv.querySelectorAll('[data-tee-gender]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const gender = btn.dataset.teeGender;
-      const teeName = btn.dataset.teeName;
-      const tee = course.tees[gender]?.find(t => t.tee_name === teeName);
-      if (tee) selectTee(course, tee, gender, resultsDiv);
-    });
-  });
-}
-
-function selectTee(course, tee, gender, resultsDiv) {
-  const courseName = course.club_name || course.course_name || 'Unknown Course';
-  const holes = tee.holes || [];
-  const numHoles = tee.number_of_holes || holes.length || 18;
-  const pars = holes.map(h => h.par || 4);
-  const yardages = holes.map(h => h.yardage || 0);
-
-  document.getElementById('new-round-name').value = courseName;
-  document.getElementById('new-round-holes').value = numHoles <= 9 ? '9' : '18';
-
-  const teeSummary = (t, g) => ({
-    tee_name: t.tee_name, tee_gender: g,
-    total_yards: t.total_yards, par_total: t.par_total,
-    course_rating: t.course_rating, slope_rating: t.slope_rating,
-    number_of_holes: t.number_of_holes,
-  });
-
-  window._pendingCourseInfo = {
-    id: course.id,
-    club_name: course.club_name || '',
-    course_name: course.course_name || '',
-    city: course.location?.city || '',
-    state: course.location?.state || '',
-    country: course.location?.country || '',
-    latitude: course.location?.latitude || null,
-    longitude: course.location?.longitude || null,
-    tee_name: tee.tee_name,
-    tee_gender: gender,
-    par_total: tee.par_total,
-    total_yards: tee.total_yards,
-    course_rating: tee.course_rating,
-    slope_rating: tee.slope_rating,
-    number_of_holes: numHoles,
-    pars,
-    yardages,
-    tees: [
-      ...(course.tees?.male || []).map(t => teeSummary(t, 'male')),
-      ...(course.tees?.female || []).map(t => teeSummary(t, 'female')),
-    ],
-  };
-
-  const genderLabel = gender === 'male' ? "Men's" : "Women's";
-  resultsDiv.innerHTML = `
-    <div style="padding:0.5rem;background:#1a2e1a;border-radius:4px;font-size:0.85rem">
-      <strong style="color:#8fdf8f">✓ ${courseName} — ${tee.tee_name} (${genderLabel})</strong>
-      <div style="color:#6a8a6a;font-size:0.8rem">${course.location?.city || ''}${course.location?.state ? ', ' + course.location.state : ''} · Par ${tee.par_total} · ${tee.total_yards} yds · Rating ${tee.course_rating}/${tee.slope_rating}</div>
-      <div style="color:#6a8a6a;font-size:0.75rem;margin-top:0.25rem">Pars: ${pars.join(', ')}</div>
-      <div style="color:#6a8a6a;font-size:0.75rem">Yards: ${yardages.join(', ')}</div>
-      <div style="margin-top:0.3rem;font-size:0.75rem;color:#5a7a5a">Click "Add Round" below to use this course and tee selection.</div>
-    </div>
-  `;
-  toast(`Selected: ${courseName} — ${tee.tee_name}`);
-}
-
-async function selectCourseOpenGolf(basicCourse, resultsDiv) {
-  resultsDiv.innerHTML = '<p style="font-size:0.8rem;color:#6a8a6a">Loading course details...</p>';
-  const detailed = await getCourseDetailOpenGolf(basicCourse.id);
-  const course = detailed || basicCourse;
+  // Try to get detailed course data (may include scorecard)
+  let course = basicData;
+  try {
+    const resp = await fetch(`https://api.opengolfapi.org/v1/courses/${courseId}`);
+    if (resp.ok) {
+      const detailed = await resp.json();
+      if (detailed) course = detailed;
+    }
+  } catch (e) { /* use basic data */ }
 
   const name = course.course_name || course.club_name || 'Unknown Course';
-  const numHoles = course.holes_count || 18;
+  const holes = course.holes_count || 18;
 
+  // Extract pars from scorecard if available
   let pars = null;
   if (course.scorecard && Array.isArray(course.scorecard) && course.scorecard.length > 0) {
     pars = course.scorecard.sort((a, b) => a.hole - b.hole).map(h => h.par || 4);
   }
 
+  // Fill in the round form
   document.getElementById('new-round-name').value = name;
-  document.getElementById('new-round-holes').value = numHoles <= 9 ? '9' : '18';
+  const holesSelect = document.getElementById('new-round-holes');
+  if (holes <= 9) holesSelect.value = '9';
+  else holesSelect.value = '18';
 
+  // Store course info for when the round is created
   window._pendingCourseInfo = {
-    id: basicCourse.id,
-    course_name: name,
+    id: courseId,
+    name,
     city: course.city || '',
     state: course.state || '',
-    country: '',
+    type: course.course_type || '',
+    par: course.par_total || null,
+    holes: holes,
+    year_built: course.year_built || null,
+    phone: course.phone || '',
+    website: course.website || '',
     latitude: course.latitude || null,
     longitude: course.longitude || null,
-    par_total: course.par_total || null,
-    total_yards: null,
-    number_of_holes: numHoles,
-    pars,
-    yardages: null,
-    tees: [],
+    address: course.address || '',
+    pars: pars
   };
+
+  // If we got pars, we'll apply them after the round is created
+  if (pars) {
+    window._pendingCoursePars = pars;
+  }
 
   resultsDiv.innerHTML = `
     <div style="padding:0.5rem;background:#1a2e1a;border-radius:4px;font-size:0.85rem">
-      <strong style="color:#8fdf8f">✓ ${name}</strong>
-      <div style="color:#6a8a6a;font-size:0.8rem">${course.city || ''}${course.state ? ', ' + course.state : ''} · Par ${course.par_total || '?'} · ${numHoles} holes</div>
-      ${pars
-        ? `<div style="color:#6a8a6a;font-size:0.75rem;margin-top:0.25rem">Pars: ${pars.join(', ')}</div>`
-        : '<div style="color:#6a8a6a;font-size:0.75rem;margin-top:0.25rem">No hole-by-hole par data available — you can enter pars manually after adding the round.</div>'
-      }
-      <div style="margin-top:0.3rem;font-size:0.75rem;color:#5a7a5a">Click "Add Round" below to use this course.</div>
+      <strong style="color:#8fdf8f">✓ Selected: ${name}</strong>
+      <div style="color:#6a8a6a;font-size:0.8rem">${course.city || ''}${course.state ? ', ' + course.state : ''} · Par ${course.par_total || '?'} · ${holes} holes</div>
+      ${pars ? `<div style="color:#6a8a6a;font-size:0.75rem;margin-top:0.3rem">Pars: ${pars.join(', ')}</div>` : '<div style="color:#6a8a6a;font-size:0.75rem;margin-top:0.3rem">No hole-by-hole par data available — you can enter pars manually after adding the round.</div>'}
+      <div style="margin-top:0.3rem;font-size:0.75rem;color:#6a8a6a">Click "Add Round" to create the round with this course.</div>
     </div>
   `;
+
   toast(`Selected: ${name}`);
+}
+
+// === RENDER: Hole Guide ===
+// Active round tracking
+let activeHoleGuideRound = null;
+let activeHoleNum = 0; // 0 = not started, 1-18 = on that hole
+
+function renderHoleGuide() {
+  const container = document.getElementById('holeguide-content');
+  if (!state.rounds.length) {
+    container.innerHTML = '<p class="empty-state">No rounds yet. Go to Setup to create one.</p>';
+    return;
+  }
+
+  let html = '<p style="font-size:0.8rem;color:#6a8a6a;margin-bottom:1rem">Use this on the course to see what rules apply to each hole and what scores trigger bonuses or penalties.</p>';
+
+  // Round selector
+  html += '<div style="margin-bottom:0.5rem;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap"><label style="font-size:0.85rem;color:#8fdf8f;font-weight:600">Round:</label> ';
+  html += `<select id="holeguide-round-select" style="background:#0f1a0f;color:#d4e8d4;border:1px solid #2a4a2a;border-radius:4px;padding:0.3rem 0.5rem;font-size:0.85rem">`;
+  state.rounds.forEach((r, i) => {
+    html += `<option value="${r.id}"${i === 0 ? ' selected' : ''}>${r.name} (${r.holes} holes)</option>`;
+  });
+  html += '</select>';
+
+  // Start/navigation buttons
+  if (activeHoleNum > 0) {
+    html += `<button class="btn btn-small btn-secondary" id="hg-prev-hole" ${activeHoleNum <= 1 ? 'disabled' : ''}>← Prev</button>`;
+    html += `<span style="font-size:0.9rem;color:#8fdf8f;font-weight:600">Hole ${activeHoleNum}</span>`;
+    html += `<button class="btn btn-small btn-primary" id="hg-next-hole">Next →</button>`;
+    html += `<button class="btn btn-small btn-danger" id="hg-stop-round">Stop</button>`;
+  } else {
+    html += `<button class="btn btn-small btn-primary" id="hg-start-round">▶ Start Round</button>`;
+  }
+  html += '</div>';
+
+  html += '<div id="holeguide-holes"></div>';
+  container.innerHTML = html;
+
+  // Render for first round by default
+  const selectedRoundId = activeHoleGuideRound || state.rounds[0].id;
+  renderHoleGuideForRound(selectedRoundId);
+
+  document.getElementById('holeguide-round-select')?.addEventListener('change', (e) => {
+    activeHoleGuideRound = e.target.value;
+    activeHoleNum = 0;
+    renderHoleGuide();
+  });
+
+  document.getElementById('hg-start-round')?.addEventListener('click', () => {
+    activeHoleGuideRound = document.getElementById('holeguide-round-select')?.value || state.rounds[0].id;
+    activeHoleNum = 1;
+    renderHoleGuide();
+  });
+
+  document.getElementById('hg-prev-hole')?.addEventListener('click', () => {
+    if (activeHoleNum > 1) { activeHoleNum--; renderHoleGuide(); }
+  });
+
+  document.getElementById('hg-next-hole')?.addEventListener('click', () => {
+    const round = state.rounds.find(r => String(r.id) === String(activeHoleGuideRound));
+    if (round && activeHoleNum < round.holes) { activeHoleNum++; renderHoleGuide(); }
+    else { activeHoleNum = 0; renderHoleGuide(); toast('Round complete!'); }
+  });
+
+  document.getElementById('hg-stop-round')?.addEventListener('click', () => {
+    activeHoleNum = 0;
+    renderHoleGuide();
+  });
+}
+
+function renderHoleGuideForRound(roundId) {
+  const round = state.rounds.find(r => String(r.id) === String(roundId));
+  if (!round) return;
+  const holesDiv = document.getElementById('holeguide-holes');
+  if (!holesDiv) return;
+
+  const activeRules = round.activeRules || [];
+  const holeRules = RULES_LIBRARY.filter(r => r.type === 'hole' && activeRules.includes(r.id));
+  const roundRules = RULES_LIBRARY.filter(r => r.type === 'round' && activeRules.includes(r.id));
+
+  let html = '';
+
+  // Round-level rules summary
+  if (roundRules.length > 0) {
+    html += '<div class="card" style="background:#0f1a0f"><h3 style="font-size:0.9rem">📋 Round-Level Rules (apply at end)</h3>';
+    roundRules.forEach(rule => {
+      html += `<div style="padding:0.2rem 0;font-size:0.8rem"><span style="color:#6ecf6e">•</span> <strong>${rule.name}</strong>: ${rule.description}</div>`;
+    });
+    html += '</div>';
+  }
+
+  // Hole-by-hole guide
+  for (let h = 0; h < round.holes; h++) {
+    const par = round.pars[h] || 4;
+    const holeNum = h + 1;
+
+    // Check for per-hole overrides
+    const overrideKey = `${round.id}-${h}`;
+    const overrideRules = state.holeRuleOverrides[overrideKey];
+    const effectiveRuleIds = overrideRules || activeRules;
+    const effectiveHoleRules = RULES_LIBRARY.filter(r => r.type === 'hole' && effectiveRuleIds.includes(r.id));
+
+    // Calculate optimal scores
+    let tips = [];
+
+    // Check what scores trigger bonuses
+    effectiveHoleRules.forEach(rule => {
+      if (rule.id === 'birdie-bonus') tips.push({ score: par - 1, text: `Birdie (${par - 1}) → -1 bonus`, type: 'bonus' });
+      if (rule.id === 'eagle-jackpot') tips.push({ score: par - 2, text: `Eagle (${par - 2}) → -3 bonus!`, type: 'bonus' });
+      if (rule.id === 'hole-in-one') tips.push({ score: 1, text: `Hole in one (1) → -5 bonus!!`, type: 'bonus' });
+      if (rule.id === 'the-deuce') tips.push({ score: 2, text: `Deuce (2) → -2 bonus`, type: 'bonus' });
+      if (rule.id === 'lucky-seven') tips.push({ score: 7, text: `Lucky 7 (7) → -2 bonus`, type: 'bonus' });
+      if (rule.id === 'par-3-hero' && par === 3) tips.push({ score: par, text: `Par on a par 3 → -1 bonus`, type: 'bonus' });
+      if (rule.id === 'par-5-survivor' && par === 5) tips.push({ score: par, text: `Par on a par 5 → -1 bonus`, type: 'bonus' });
+      if (rule.id === 'double-bogey-tax') tips.push({ score: par + 2, text: `Double bogey (${par + 2}+) → +1 penalty`, type: 'penalty' });
+      if (rule.id === 'triple-bogey-blowup') tips.push({ score: par + 3, text: `Triple bogey (${par + 3}+) → +3 penalty`, type: 'penalty' });
+      if (rule.id === 'snowman-shame') tips.push({ score: 8, text: `Snowman (8+) → +2 penalty`, type: 'penalty' });
+      if (rule.id === 'the-double-down') tips.push({ score: par * 2, text: `Double par (${par * 2}) → +2 penalty`, type: 'penalty' });
+      if (rule.id === 'the-six-pack') tips.push({ score: 6, text: `Six (6) → free beer!`, type: 'fun' });
+      if (rule.id === 'beer-per-birdie') tips.push({ score: par - 1, text: `Birdie → +1 beer count`, type: 'fun' });
+      if (rule.id === 'beer-bogey-combo') tips.push({ score: par + 1, text: `Bogey + 3 beers → -1 bonus`, type: 'bonus' });
+    });
+
+    // Determine optimal score
+    const bonusTips = tips.filter(t => t.type === 'bonus').sort((a, b) => a.score - b.score);
+    const bestTarget = bonusTips.length > 0 ? bonusTips[0].score : par;
+
+    const hasOverride = !!overrideRules;
+    const isCurrentHole = activeHoleNum === holeNum;
+    const isLD = (round.ldFront != null && round.ldFront === h) || (round.ldBack != null && round.ldBack === h);
+    const isCTP = (round.ctpFront != null && round.ctpFront === h) || (round.ctpBack != null && round.ctpBack === h);
+    const bgColor = isCurrentHole ? '#1a2a1a' : hasOverride ? '#1a1a0f' : '';
+    const borderStyle = isCurrentHole ? 'border:2px solid #6ecf6e;' : '';
+
+    html += `<div class="card" style="padding:0.6rem 0.8rem;${bgColor ? 'background:' + bgColor + ';' : ''}${borderStyle}margin-bottom:0.4rem"${isCurrentHole ? ' id="current-hole"' : ''}>
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <strong style="color:#8fdf8f;font-size:1rem">${isCurrentHole ? '▶ ' : ''}Hole ${holeNum}</strong>
+          <span style="color:#6a8a6a;font-size:0.85rem;margin-left:0.5rem">Par ${par}</span>
+          ${isLD ? '<span style="color:#ffd700;font-size:0.75rem;margin-left:0.3rem;font-weight:600">🏌️ LONGEST DRIVE</span>' : ''}
+          ${isCTP ? '<span style="color:#00bfff;font-size:0.75rem;margin-left:0.3rem;font-weight:600">🎯 CLOSEST TO PIN</span>' : ''}
+          ${hasOverride ? '<span style="color:#a0a020;font-size:0.7rem;margin-left:0.3rem">(custom rules)</span>' : ''}
+        </div>
+        <div style="font-size:0.8rem;color:#6ecf6e">🎯 Target: <strong>${bestTarget}</strong></div>
+      </div>`;
+
+    if (tips.length > 0) {
+      html += '<div style="margin-top:0.3rem;font-size:0.8rem">';
+      tips.forEach(tip => {
+        const color = tip.type === 'bonus' ? '#6ecf6e' : tip.type === 'penalty' ? '#cf6e6e' : '#a0a0cf';
+        html += `<div style="color:${color};padding:1px 0">${tip.type === 'bonus' ? '✅' : tip.type === 'penalty' ? '⚠️' : '🍺'} ${tip.text}</div>`;
+      });
+      html += '</div>';
+    } else {
+      html += '<div style="font-size:0.8rem;color:#6a8a6a;margin-top:0.2rem">No special rules for this hole. Just play your best!</div>';
+    }
+
+    html += '</div>';
+  }
+
+  // Beer strategy summary
+  const beerRules = effectiveRuleIds => RULES_LIBRARY.filter(r => effectiveRuleIds.includes(r.id) && (r.id.includes('beer') || r.id === 'sober-penalty' || r.id === 'party-animal' || r.id === 'designated-driver' || r.id === 'happy-hour' || r.id === 'buzzkill' || r.id === 'two-beer-minimum'));
+  const activeBeerRules = beerRules(activeRules);
+  if (activeBeerRules.length > 0) {
+    html += '<div class="card" style="background:#0f1a0f"><h3 style="font-size:0.9rem">🍺 Beer Strategy</h3>';
+    activeBeerRules.forEach(rule => {
+      html += `<div style="padding:0.2rem 0;font-size:0.8rem"><span style="color:#cfcf6e">•</span> <strong>${rule.name}</strong>: ${rule.description}</div>`;
+    });
+    // Optimal beer count
+    let optimalBeers = '2-5';
+    if (activeRules.includes('party-animal')) optimalBeers = '6+ (legend status)';
+    else if (activeRules.includes('happy-hour')) optimalBeers = '4-5 (sweet spot)';
+    else if (activeRules.includes('beer-handicap')) optimalBeers = '3+ (every 3 = -1 stroke)';
+    else if (activeRules.includes('two-beer-minimum')) optimalBeers = '2+ (meet the minimum)';
+    html += `<div style="margin-top:0.3rem;font-size:0.85rem;color:#cfcf6e"><strong>🎯 Optimal beers: ${optimalBeers}</strong></div>`;
+    html += '</div>';
+  }
+
+  holesDiv.innerHTML = html;
+
+  // Auto-scroll to current hole
+  if (activeHoleNum > 0) {
+    const currentEl = document.getElementById('current-hole');
+    if (currentEl) currentEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
 }
 
 function renderAll() {
   renderStandings();
   renderScorecard();
+  renderHoleGuide();
   renderRulesLibrary();
   renderAwards();
   renderSetup();
@@ -1131,7 +1379,6 @@ function renderAll() {
 
 // === Init ===
 initTabs();
-setApiKey(localStorage.getItem(GCAPI_KEY_STORAGE) || '');
 // Load from localStorage first for instant render, then Firestore will override via initAuth
 state = state || (function() { try { const raw = localStorage.getItem('golf-tournament-state'); return raw ? JSON.parse(raw) : null; } catch(e) { return null; } })() || { tournamentName: 'Weekend Tournament', players: [], rounds: [], globalRules: [], holeRuleOverrides: {}, beerModifier: { beersPerStroke: 3, strokesOff: 1 } };
 renderAll();
