@@ -1,8 +1,8 @@
-import { loadState, saveState, nextId, exportState, importState, initFirestore, isAllowedEditor, getEditorEmails, setEditorEmails, listenToState } from './state.js?v=20260430b';
-import { RULES_LIBRARY, RULE_CATEGORIES } from './rules.js?v=20260430b';
-import { calculateStandings, calculateRoundScore } from './scoring.js?v=20260430b';
-import { exportToExcel } from './excel-export.js?v=20260430b';
-import { computeAwards } from './awards.js?v=20260430b';
+import { loadState, saveState, nextId, exportState, importState, initFirestore, isAllowedEditor, getEditorEmails, setEditorEmails, listenToState, transactionalUpdate } from './state.js?v=20260501f';
+import { RULES_LIBRARY, RULE_CATEGORIES } from './rules.js?v=20260501c';
+import { calculateStandings, calculateRoundScore } from './scoring.js?v=20260501c';
+import { exportToExcel } from './excel-export.js?v=20260501c';
+import { computeAwards } from './awards.js?v=20260501c';
 
 let state = null;
 let isAuthenticated = false;
@@ -132,15 +132,29 @@ function renderAuthBar(auth, GoogleAuthProvider, signInWithPopup, signInWithRedi
 }
 
 // === Tab Navigation ===
+function switchTab(tabName) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  const tab = document.querySelector(`.tab[data-tab="${tabName}"]`);
+  if (tab) {
+    tab.classList.add('active');
+    document.getElementById(`${tabName}-panel`).classList.add('active');
+  }
+}
+
 function initTabs() {
   document.querySelectorAll('.tab').forEach(tab => {
     tab.addEventListener('click', () => {
-      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-      tab.classList.add('active');
-      document.getElementById(`${tab.dataset.tab}-panel`).classList.add('active');
+      const tabName = tab.dataset.tab;
+      switchTab(tabName);
+      history.replaceState(null, '', `#${tabName}`);
     });
   });
+
+  const hash = location.hash.replace('#', '');
+  if (hash && document.querySelector(`.tab[data-tab="${hash}"]`)) {
+    switchTab(hash);
+  }
 }
 
 // === Toast ===
@@ -245,21 +259,52 @@ function renderStandings() {
 
   html += '</tbody></table></div>';
 
-  // Per-round breakdown
+  // Per-round breakdown — incomplete rounds first, then completed
   if (state.rounds.length > 0) {
-    html += '<h3 style="margin-top:1.5rem">Round Breakdown</h3>';
-    state.rounds.forEach(round => {
-      html += `<div class="card"><h3>${round.name} (${round.holes} holes)</h3>`;
+    const isRoundComplete = (round) => {
+      const scramble = round.scramble && round.teams && round.teams.length > 0;
+      if (scramble) {
+        const teams = round.teams.filter(t => round.scores?.[t.id]?.participated);
+        return teams.length > 0 && teams.every(t => {
+          const holes = round.scores[t.id]?.holes || [];
+          return holes.filter(h => h && h > 0).length === round.holes;
+        });
+      }
+      const participants = state.players.filter(p => round.scores?.[p.id]?.participated);
+      return participants.length > 0 && participants.every(p => {
+        const holes = round.scores[p.id]?.holes || [];
+        return holes.filter(h => h && h > 0).length === round.holes;
+      });
+    };
+    const incompleteRounds = state.rounds.filter(r => !isRoundComplete(r));
+    const completeRounds = state.rounds.filter(r => isRoundComplete(r));
+    const sortedRounds = [...incompleteRounds, ...completeRounds];
+
+    let shownCompleteHeader = false;
+    if (incompleteRounds.length > 0) {
+      html += '<h3 style="margin-top:1.5rem">In Progress</h3>';
+    }
+    sortedRounds.forEach(round => {
+      if (!shownCompleteHeader && isRoundComplete(round)) {
+        html += '<h3 style="margin-top:1.5rem">Completed Rounds</h3>';
+        shownCompleteHeader = true;
+      }
+      const scrambleLabel = (round.scramble && round.teams?.length > 0) ? ' · Scramble' : '';
+      html += `<div class="card"><h3>${round.name} (${round.holes} holes${scrambleLabel})</h3>`;
       html += '<table><thead><tr><th>Player</th><th>Raw</th><th>HCP</th><th>Adjusted</th><th>Beers</th><th>Modifiers</th></tr></thead><tbody>';
       standings.forEach(s => {
         const rr = s.roundResults.find(r => r.roundId === round.id);
         if (!rr || rr.skipped) {
           html += `<tr><td style="text-align:left">${s.playerName}</td><td colspan="5" style="color:#5a7a5a">Did not play</td></tr>`;
         } else {
+          const teamLabel = (round.scramble && round.teams) ? (() => {
+            const team = round.teams.find(t => t.players.includes(s.playerId));
+            return team ? ` <span style="color:#6a8a6a;font-size:0.7rem">(${team.name})</span>` : '';
+          })() : '';
           const mods = (rr.roundModifiers || []).map(m =>
             `<span class="rule-badge ${RULES_LIBRARY.find(r => r.id === m.ruleId)?.category || 'wild'}">${m.label}</span>`
           ).join('');
-          html += `<tr><td style="text-align:left">${s.playerName}</td><td>${rr.rawTotal}</td><td style="color:#6ecf6e">${rr.handicapStrokes ? '-' + rr.handicapStrokes : '-'}</td><td style="font-weight:600">${rr.adjustedTotal - (rr.handicapStrokes || 0)}</td><td>🍺 ${rr.beers}</td><td>${mods || '-'}</td></tr>`;
+          html += `<tr><td style="text-align:left">${s.playerName}${teamLabel}</td><td>${rr.rawTotal}</td><td style="color:#6ecf6e">${rr.handicapStrokes ? '-' + rr.handicapStrokes : '-'}</td><td style="font-weight:600">${rr.adjustedTotal - (rr.handicapStrokes || 0)}</td><td>🍺 ${rr.beers}</td><td>${mods || '-'}</td></tr>`;
         }
       });
       html += '</tbody></table></div>';
@@ -296,38 +341,118 @@ function renderScorecard() {
   }
 
   let html = '';
-  state.rounds.forEach(round => {
+  const isRoundComplete = (round) => {
+    const scramble = round.scramble && round.teams && round.teams.length > 0;
+    if (scramble) {
+      const teams = round.teams.filter(t => round.scores?.[t.id]?.participated);
+      return teams.length > 0 && teams.every(t => {
+        const holes = round.scores[t.id]?.holes || [];
+        return holes.filter(h => h && h > 0).length === round.holes;
+      });
+    }
+    const participants = state.players.filter(p => round.scores?.[p.id]?.participated);
+    return participants.length > 0 && participants.every(p => {
+      const holes = round.scores[p.id]?.holes || [];
+      return holes.filter(h => h && h > 0).length === round.holes;
+    });
+  };
+  const incompleteRounds = state.rounds.filter(r => !isRoundComplete(r));
+  const completeRounds = state.rounds.filter(r => isRoundComplete(r));
+  const sortedRounds = [...incompleteRounds, ...completeRounds];
+
+  let shownCompleteHeader = false;
+  if (incompleteRounds.length > 0) {
+    html += '<h3 style="margin-bottom:0.5rem">In Progress</h3>';
+  }
+  sortedRounds.forEach(round => {
+    if (!shownCompleteHeader && isRoundComplete(round)) {
+      html += '<h3 style="margin-top:1.5rem;margin-bottom:0.5rem">Completed Rounds</h3>';
+      shownCompleteHeader = true;
+    }
+    const scrambleTag = (round.scramble && round.teams?.length > 0) ? ' · Scramble' : '';
     html += `<div class="card">
       <div class="round-header">
-        <h3>${round.name} — ${round.holes} holes</h3>
+        <h3>${round.name} — ${round.holes} holes${scrambleTag}</h3>
         <div>
           <span style="font-size:0.75rem;color:#6a8a6a">Active rules: ${round.activeRules.length}</span>
         </div>
       </div>`;
 
+    const roundIsScramble = round.scramble && round.teams && round.teams.length > 0;
+
+    // Build scoring entities for this round
+    let roundEntities;
+    if (roundIsScramble) {
+      roundEntities = round.teams.map(t => ({ id: t.id, name: t.name }));
+    } else {
+      roundEntities = state.players.map(p => ({ id: p.id, name: p.name }));
+    }
+
+    // Round summary highlights
+    const roundResults = roundEntities.map(e => {
+      const pd = round.scores?.[e.id];
+      if (!pd?.participated) return null;
+      const result = calculateRoundScore(round, e.id, state.holeRuleOverrides);
+      return result ? { entity: e, result } : null;
+    }).filter(Boolean);
+
+    const roundComplete = roundResults.length > 0 && roundResults.every(r => {
+      const holes = round.scores[r.entity.id]?.holes || [];
+      return holes.filter(h => h && h > 0).length === round.holes;
+    });
+
+    if (roundComplete) {
+      const totalPar = round.pars.reduce((s, p) => s + (p || 4), 0);
+      const sorted = [...roundResults].sort((a, b) => a.result.adjustedTotal - b.result.adjustedTotal);
+      const winner = sorted[0];
+      const winnerToPar = winner.result.rawTotal - totalPar;
+      const winnerToParStr = winnerToPar > 0 ? `+${winnerToPar}` : winnerToPar === 0 ? 'E' : `${winnerToPar}`;
+
+      let bestHole = null;
+      let worstHole = null;
+      roundResults.forEach(r => {
+        (r.result.holeDetails || []).forEach(hd => {
+          if (!hd.score) return;
+          const diff = hd.score - hd.par;
+          if (!bestHole || diff < bestHole.diff) bestHole = { player: r.entity.name, hole: hd.hole, score: hd.score, par: hd.par, diff };
+          if (!worstHole || diff > worstHole.diff) worstHole = { player: r.entity.name, hole: hd.hole, score: hd.score, par: hd.par, diff };
+        });
+      });
+
+      const mostBeers = [...roundResults].sort((a, b) => (round.scores[b.entity.id]?.beers || 0) - (round.scores[a.entity.id]?.beers || 0))[0];
+      const mostBeersCount = round.scores[mostBeers.entity.id]?.beers || 0;
+
+      html += `<div style="background:#0a1a0a;border:1px solid #2d5a2d;border-radius:6px;padding:0.75rem;margin-bottom:0.75rem">`;
+      html += `<div style="font-size:0.85rem;font-weight:700;color:#ffd700;margin-bottom:0.4rem">🏆 ${winner.entity.name} wins — ${winner.result.adjustedTotal} adjusted (${winnerToParStr})</div>`;
+      html += `<div style="display:flex;gap:1rem;flex-wrap:wrap;font-size:0.78rem;color:#a0c8a0">`;
+      if (bestHole) {
+        const bestLabel = bestHole.diff === -2 ? 'Eagle' : bestHole.diff === -1 ? 'Birdie' : bestHole.diff === -3 ? 'Albatross' : `${bestHole.diff}`;
+        html += `<span>🔥 Best: ${bestHole.player} H${bestHole.hole} (${bestHole.score} on par ${bestHole.par}, ${bestLabel})</span>`;
+      }
+      if (worstHole) {
+        html += `<span>💀 Worst: ${worstHole.player} H${worstHole.hole} (${worstHole.score} on par ${worstHole.par})</span>`;
+      }
+      if (mostBeersCount > 0) {
+        html += `<span>🍺 Most beers: ${mostBeers.entity.name} (${mostBeersCount})</span>`;
+      }
+      html += `</div></div>`;
+    }
+
     // Par row header
-    html += '<div class="scorecard-scroll"><table><thead><tr><th>Player</th>';
+    const entityLabel = roundIsScramble ? 'Team' : 'Player';
+    html += `<div class="scorecard-scroll"><table><thead><tr><th>${entityLabel}</th>`;
     for (let h = 0; h < round.holes; h++) {
       html += `<th>H${h + 1}<br><span style="font-size:0.65rem;color:#6a8a6a">P${round.pars[h] || 4}</span></th>`;
     }
     html += '<th>🍺</th><th>Raw</th><th>Adj</th></tr></thead><tbody>';
 
-    state.players.forEach(player => {
-      const pd = round.scores?.[player.id];
+    roundEntities.forEach(entity => {
+      const pd = round.scores?.[entity.id];
       const participated = pd?.participated ?? false;
-      const result = calculateRoundScore(round, player.id, state.holeRuleOverrides);
+      const result = calculateRoundScore(round, entity.id, state.holeRuleOverrides);
 
       html += `<tr><td style="text-align:left;white-space:nowrap">`;
-
-      if (isEditor) {
-        const checked = participated ? 'checked' : '';
-        html += `<label style="display:inline;font-size:0.85rem;color:#d4e8d4">
-          <input type="checkbox" class="participate-check" data-round="${round.id}" data-player="${player.id}" ${checked} style="margin-right:4px" />
-          ${player.name}
-        </label>`;
-      } else {
-        html += `${player.name}${!participated ? ' <span style="color:#5a7a5a;font-size:0.7rem">(DNP)</span>' : ''}`;
-      }
+      html += `${entity.name}${!participated ? ' <span style="color:#5a7a5a;font-size:0.7rem">(DNP)</span>' : ''}`;
       html += '</td>';
 
       for (let h = 0; h < round.holes; h++) {
@@ -338,25 +463,10 @@ function renderScorecard() {
         if (scoreNum > 0 && scoreNum < par) cellStyle = 'color:#6ecf6e;font-weight:700';
         else if (scoreNum > par) cellStyle = 'color:#df8f8f';
         else if (scoreNum === par) cellStyle = 'color:#d4e8d4';
-
-        if (isEditor && participated) {
-          html += `<td><input type="number" class="score-input" min="1" max="20" inputmode="numeric" pattern="[0-9]*"
-            data-round="${round.id}" data-player="${player.id}" data-hole="${h}"
-            value="${score || ''}" /></td>`;
-        } else {
-          html += `<td style="${cellStyle}">${score || '-'}</td>`;
-        }
+        html += `<td style="${cellStyle}">${score || '-'}</td>`;
       }
 
-      // Beer input
-      if (isEditor && participated) {
-        html += `<td><input type="number" class="beer-input" min="0" max="30" inputmode="numeric" pattern="[0-9]*"
-          data-round="${round.id}" data-player="${player.id}" data-field="beers"
-          value="${pd?.beers || 0}" /></td>`;
-      } else {
-        html += `<td>🍺 ${pd?.beers || 0}</td>`;
-      }
-
+      html += `<td>🍺 ${pd?.beers || 0}</td>`;
       html += `<td>${result ? result.rawTotal : '-'}</td>`;
       html += `<td style="font-weight:600">${result ? result.adjustedTotal : '-'}</td>`;
       html += '</tr>';
@@ -364,124 +474,22 @@ function renderScorecard() {
 
     html += '</tbody></table></div>';
 
-    // Per-hole rule overrides (for editors)
-    if (isEditor) {
-      html += `<details style="margin-top:0.5rem"><summary style="cursor:pointer;font-size:0.85rem;color:#6a8a6a;padding:0.4rem 0">⚙️ Per-hole rule overrides</summary>`;
-      html += `<div style="margin-top:0.5rem">`;
-      html += `<div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.5rem;flex-wrap:wrap">`;
-      html += `<label style="font-size:0.85rem;color:#8fdf8f">Hole:</label>`;
-      html += `<select class="hole-override-select" data-round="${round.id}" style="background:#0f1a0f;color:#d4e8d4;border:1px solid #2a4a2a;border-radius:4px;padding:0.4rem;font-size:0.9rem">`;
-      for (let h = 0; h < round.holes; h++) {
-        const overrideKey = `${round.id}-${h}`;
-        const hasOverride = !!state.holeRuleOverrides[overrideKey];
-        html += `<option value="${h}">H${h + 1} (Par ${round.pars[h] || 4})${hasOverride ? ' ✏️' : ''}</option>`;
-      }
-      html += `</select>`;
-      html += `<button class="btn btn-small btn-secondary hole-override-reset" data-round="${round.id}">↺ Reset to Round Default</button>`;
-      html += `</div>`;
-      html += `<div class="hole-override-rules" data-round="${round.id}" style="display:flex;flex-direction:column;gap:0.3rem"></div>`;
-      html += `</div></details>`;
-    }
+    html += `<div style="margin-top:0.5rem;font-size:0.8rem;color:#6a8a6a">Edit scores in the <a href="#liveround" style="color:#6ecf6e;cursor:pointer" class="scorecard-edit-link" data-round="${round.id}">Live Round</a> tab.</div>`;
 
     html += '</div>';
   });
 
   container.innerHTML = html;
 
-  // Attach event listeners
-  container.querySelectorAll('.score-input').forEach(input => {
-    input.addEventListener('change', (e) => {
-      if (!isEditor) return;
-      const { round, player, hole } = e.target.dataset;
-      const val = parseInt(e.target.value) || 0;
-      ensureScoreData(round, player);
-      state.rounds.find(r => r.id === round).scores[player].holes[parseInt(hole)] = val > 0 ? val : null;
-      persist();
-    });
-  });
-
-  container.querySelectorAll('.beer-input').forEach(input => {
-    input.addEventListener('change', (e) => {
-      if (!isEditor) return;
-      const { round, player } = e.target.dataset;
-      ensureScoreData(round, player);
-      state.rounds.find(r => r.id === round).scores[player].beers = parseInt(e.target.value) || 0;
-      persist();
-    });
-  });
-
-  container.querySelectorAll('.participate-check').forEach(cb => {
-    cb.addEventListener('change', (e) => {
-      if (!isEditor) return;
-      const { round, player } = e.target.dataset;
-      ensureScoreData(round, player);
-      state.rounds.find(r => r.id === round).scores[player].participated = e.target.checked;
-      persist();
-    });
-  });
-
-  // Per-hole override UI — hole selector + rule toggles
-  container.querySelectorAll('.hole-override-select').forEach(select => {
-    function renderOverrideRules() {
-      const roundId = select.dataset.round;
-      const holeIdx = parseInt(select.value);
-      const round = state.rounds.find(r => String(r.id) === String(roundId));
-      if (!round) return;
-      const rulesDiv = container.querySelector(`.hole-override-rules[data-round="${roundId}"]`);
-      if (!rulesDiv) return;
-      const overrideKey = `${roundId}-${holeIdx}`;
-      const currentOverrides = state.holeRuleOverrides[overrideKey] || null;
-      const effectiveRules = currentOverrides || round.activeRules || [];
-      const holeRules = RULES_LIBRARY.filter(r => r.type === 'hole');
-
-      rulesDiv.innerHTML = holeRules.map(rule => {
-        const isActive = effectiveRules.includes(rule.id);
-        return `<div style="display:flex;align-items:center;gap:0.5rem;padding:0.5rem;background:${isActive ? '#1a2e1a' : '#0f1a0f'};border:1px solid ${isActive ? '#2d5a2d' : '#1a2e1a'};border-radius:6px;cursor:pointer;min-height:44px" class="hole-rule-toggle" data-round="${roundId}" data-hole="${holeIdx}" data-rule="${rule.id}">
-          <span style="font-size:1.2rem;min-width:28px;text-align:center">${isActive ? '✅' : '⬜'}</span>
-          <div style="flex:1"><div style="font-size:0.85rem;font-weight:600;color:${isActive ? '#6ecf6e' : '#8aaa8a'}">${rule.name}</div><div style="font-size:0.75rem;color:#6a8a6a">${rule.description}</div></div>
-        </div>`;
-      }).join('');
-
-      // Bind toggle clicks
-      rulesDiv.querySelectorAll('.hole-rule-toggle').forEach(toggle => {
-        toggle.addEventListener('click', () => {
-          if (!isEditor) return;
-          const rId = toggle.dataset.round;
-          const hIdx = parseInt(toggle.dataset.hole);
-          const ruleId = toggle.dataset.rule;
-          const key = `${rId}-${hIdx}`;
-          const rd = state.rounds.find(r => String(r.id) === String(rId));
-          if (!state.holeRuleOverrides[key]) {
-            state.holeRuleOverrides[key] = [...(rd?.activeRules || [])];
-          }
-          const arr = state.holeRuleOverrides[key];
-          const idx = arr.indexOf(ruleId);
-          if (idx >= 0) arr.splice(idx, 1);
-          else arr.push(ruleId);
-          persist();
-          renderOverrideRules();
-        });
-      });
-    }
-
-    select.addEventListener('change', renderOverrideRules);
-    renderOverrideRules(); // initial render
-  });
-
-  // Reset hole override to round default
-  container.querySelectorAll('.hole-override-reset').forEach(btn => {
-    btn.addEventListener('click', () => {
-      if (!isEditor) return;
-      const roundId = btn.dataset.round;
-      const select = container.querySelector(`.hole-override-select[data-round="${roundId}"]`);
-      if (!select) return;
-      const holeIdx = parseInt(select.value);
-      const key = `${roundId}-${holeIdx}`;
-      delete state.holeRuleOverrides[key];
-      persist();
-      toast(`Hole ${holeIdx + 1} reset to round defaults`);
-      // Re-render the rules for this hole
-      select.dispatchEvent(new Event('change'));
+  // Link to live round tab with the correct round selected
+  container.querySelectorAll('.scorecard-edit-link').forEach(link => {
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      liveRoundId = link.dataset.round;
+      liveHoleIdx = 0;
+      switchTab('liveround');
+      history.replaceState(null, '', '#liveround');
+      renderLiveRound();
     });
   });
 }
@@ -579,7 +587,7 @@ function renderSetup() {
   html += `<div class="card"><h3>Tournament Settings</h3>
     <div class="form-row">
       <div class="form-group"><label>Tournament Name</label>
-        <input type="text" id="tournament-name" value="${state.tournamentName}" style="width:250px" />
+        <input type="text" id="tournament-name" value="${state.tournamentName}" style="width:250px;max-width:100%" />
       </div>
       <button class="btn btn-primary btn-small" id="save-name-btn">Save</button>
     </div>
@@ -612,7 +620,7 @@ function renderSetup() {
     <div id="editor-list" style="margin-bottom:0.5rem"><p style="font-size:0.8rem;color:#6a8a6a">Loading editors...</p></div>
     <div class="form-row">
       <div class="form-group"><label>Add Editor Email</label>
-        <input type="email" id="new-editor-email" placeholder="email@example.com" style="width:250px" />
+        <input type="email" id="new-editor-email" placeholder="email@example.com" style="width:250px;max-width:100%" />
       </div>
       <button class="btn btn-primary btn-small" id="add-editor-btn">Add Editor</button>
     </div>
@@ -622,7 +630,7 @@ function renderSetup() {
   html += `<div class="card"><h3>Players (${state.players.length})</h3>
     <div class="form-row">
       <div class="form-group"><label>Player Name</label>
-        <input type="text" id="new-player-name" placeholder="e.g. Tiger" style="width:180px" />
+        <input type="text" id="new-player-name" placeholder="e.g. Tiger" style="width:180px;max-width:100%" />
       </div>
       <div class="form-group"><label>Handicap</label>
         <input type="number" id="new-player-handicap" min="0" max="54" value="0" style="width:60px" />
@@ -645,11 +653,11 @@ function renderSetup() {
   // Rounds
   html += `<div class="card"><h3>Rounds (${state.rounds.length})</h3>
     <div style="margin-bottom:0.75rem;padding-bottom:0.75rem;border-bottom:1px solid #2a4a2a">
-      <label style="font-size:0.9rem;color:#8fdf8f;font-weight:600">⛳ Search Golf Course (OpenGolfAPI)</label>
-      <p style="font-size:0.75rem;color:#6a8a6a;margin:0.2rem 0 0.4rem">Search for a course to auto-fill pars and course info. <a href="https://opengolfapi.org" target="_blank" rel="noopener">Data from OpenGolfAPI (ODbL)</a></p>
+      <label style="font-size:0.9rem;color:#8fdf8f;font-weight:600">⛳ Search Golf Course</label>
+      <p style="font-size:0.75rem;color:#6a8a6a;margin:0.2rem 0 0.4rem">Search for a course to auto-fill pars and course info. <a href="https://golfcourseapi.com" target="_blank" rel="noopener">Data from GolfCourseAPI</a></p>
       <div class="form-row">
         <div class="form-group"><label>Course Name or City</label>
-          <input type="text" id="course-search-input" placeholder="e.g. Pebble Beach, Augusta" style="width:250px" />
+          <input type="text" id="course-search-input" placeholder="e.g. Pebble Beach, Augusta" style="width:250px;max-width:100%" />
         </div>
         <button class="btn btn-primary btn-small" id="course-search-btn">🔍 Search</button>
       </div>
@@ -657,13 +665,18 @@ function renderSetup() {
     </div>
     <div class="form-row">
       <div class="form-group"><label>Round Name</label>
-        <input type="text" id="new-round-name" placeholder="e.g. Saturday AM" style="width:150px" />
+        <input type="text" id="new-round-name" placeholder="e.g. Saturday AM" style="width:150px;max-width:100%" />
       </div>
       <div class="form-group"><label>Holes</label>
         <select id="new-round-holes">
           <option value="9">9</option>
           <option value="18" selected>18</option>
         </select>
+      </div>
+      <div class="form-group" style="justify-content:flex-end">
+        <label style="display:flex;align-items:center;gap:0.3rem;cursor:pointer">
+          <input type="checkbox" id="new-round-scramble" /> Scramble
+        </label>
       </div>
       <button class="btn btn-primary btn-small" id="add-round-btn">Add Round</button>
     </div>`;
@@ -692,11 +705,21 @@ function renderSetup() {
         <span style="font-weight:600">${round.name} (${round.holes} holes)</span>
         <button class="btn btn-danger btn-small remove-round-btn" data-id="${round.id}">✕</button>
       </div>
+      <div style="margin-top:0.4rem">
+        ${(() => {
+          const hasScores = Object.values(round.scores || {}).some(pd => (pd.holes || []).some(h => h && h > 0));
+          const disabled = hasScores ? 'disabled' : '';
+          const hint = hasScores ? ' <span style="color:#6a8a6a;font-size:0.75rem">(locked — scores exist)</span>' : '';
+          return `<label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;${hasScores ? 'opacity:0.6;' : 'cursor:pointer;'}">
+            <input type="checkbox" class="scramble-toggle" data-round="${round.id}" ${round.scramble ? 'checked' : ''} ${disabled} /> 👥 Scramble (2-person teams share one scorecard)${hint}
+          </label>`;
+        })()}
+      </div>
       ${courseHtml}
       <div style="margin-top:0.4rem">
         <label>Pars (comma-separated or set all):</label>
         <div class="form-row">
-          <input type="text" class="par-input" data-round="${round.id}" value="${(round.pars || []).join(',')}" style="width:300px" placeholder="4,3,5,4,..." />
+          <input type="text" class="par-input" data-round="${round.id}" value="${(round.pars || []).join(',')}" style="width:300px;max-width:100%" placeholder="4,3,5,4,..." />
           <select class="par-preset" data-round="${round.id}">
             <option value="">Set all to...</option>
             <option value="3">All Par 3</option>
@@ -753,7 +776,51 @@ function renderSetup() {
       html += `<span class="rule-chip ${isActive ? 'selected' : ''}" data-round-rule="${round.id}" data-rule-id="${rule.id}" title="${rule.description}">${rule.name}</span>`;
     });
 
-    html += '</div></div></div>';
+    html += '</div></div>';
+
+    // Scramble team assignment
+    if (round.scramble) {
+      const teams = round.teams || [];
+      const assignedIds = new Set(teams.flatMap(t => t.players));
+      const unassigned = state.players.filter(p => !assignedIds.has(p.id));
+
+      html += `<div style="margin-top:0.75rem;padding-top:0.75rem;border-top:1px solid #2a4a2a">
+        <label style="font-size:0.9rem;color:#8fdf8f;font-weight:600">👥 Scramble Teams</label>`;
+
+      if (teams.length > 0) {
+        teams.forEach(team => {
+          const names = team.players.map(pid => state.players.find(p => p.id === pid)?.name || '?').join(' & ');
+          html += `<div style="display:flex;align-items:center;gap:0.5rem;padding:0.3rem 0;border-bottom:1px solid #1a2e1a">
+            <span style="flex:1;font-size:0.85rem">${names}</span>
+            <button class="btn btn-danger btn-small remove-team-btn" data-round="${round.id}" data-team="${team.id}">✕</button>
+          </div>`;
+        });
+      }
+
+      if (unassigned.length >= 2) {
+        html += `<div class="form-row" style="margin-top:0.5rem">
+          <div class="form-group"><label>Player 1</label>
+            <select class="team-player-select" data-round="${round.id}" data-slot="1">
+              <option value="">Pick...</option>
+              ${unassigned.map(p => `<option value="${p.id}">${p.name}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group"><label>Player 2</label>
+            <select class="team-player-select" data-round="${round.id}" data-slot="2">
+              <option value="">Pick...</option>
+              ${unassigned.map(p => `<option value="${p.id}">${p.name}</option>`).join('')}
+            </select>
+          </div>
+          <button class="btn btn-primary btn-small create-team-btn" data-round="${round.id}">Create Team</button>
+        </div>`;
+      } else if (unassigned.length === 1) {
+        html += `<p style="font-size:0.8rem;color:#6a8a6a;margin-top:0.3rem">${unassigned[0].name} is unpaired (odd number of players).</p>`;
+      }
+
+      html += '</div>';
+    }
+
+    html += '</div>';
   });
 
   html += '</div>';
@@ -823,6 +890,7 @@ function attachSetupListeners() {
     const name = document.getElementById('new-round-name').value.trim() || `Round ${state.rounds.length + 1}`;
     const holes = parseInt(document.getElementById('new-round-holes').value) || 18;
     const pars = new Array(holes).fill(4);
+    const isScramble = document.getElementById('new-round-scramble')?.checked || false;
     const roundData = {
       id: nextId(),
       name,
@@ -830,6 +898,8 @@ function attachSetupListeners() {
       pars,
       activeRules: [...state.globalRules],
       scores: {},
+      scramble: isScramble,
+      teams: isScramble ? [] : undefined,
     };
     // Attach pending course info if a course was selected
     if (window._pendingCourseInfo) {
@@ -953,6 +1023,52 @@ function attachSetupListeners() {
     });
   });
 
+  // Scramble toggle on existing rounds
+  document.querySelectorAll('.scramble-toggle').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const round = state.rounds.find(r => String(r.id) === String(cb.dataset.round));
+      if (!round) return;
+      round.scramble = cb.checked;
+      if (cb.checked && !round.teams) round.teams = [];
+      persist().then(() => { renderSetup(); attachSetupListeners(); });
+      toast(cb.checked ? 'Scramble mode enabled' : 'Scramble mode disabled');
+    });
+  });
+
+  // Scramble team management
+  document.querySelectorAll('.create-team-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const round = state.rounds.find(r => String(r.id) === String(btn.dataset.round));
+      if (!round) return;
+      const container = btn.closest('.form-row');
+      const selects = container.querySelectorAll('.team-player-select');
+      const p1 = selects[0]?.value;
+      const p2 = selects[1]?.value;
+      if (!p1 || !p2 || p1 === p2) { toast('Select two different players'); return; }
+      const name1 = state.players.find(p => p.id === p1)?.name || '?';
+      const name2 = state.players.find(p => p.id === p2)?.name || '?';
+      const teamId = nextId();
+      if (!round.teams) round.teams = [];
+      round.teams.push({ id: teamId, players: [p1, p2], name: `${name1} & ${name2}` });
+      if (!round.scores) round.scores = {};
+      round.scores[teamId] = { participated: true, holes: new Array(round.holes).fill(0), beers: 0 };
+      persist().then(() => { renderSetup(); attachSetupListeners(); });
+      toast(`Team: ${name1} & ${name2}`);
+    });
+  });
+
+  document.querySelectorAll('.remove-team-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const round = state.rounds.find(r => String(r.id) === String(btn.dataset.round));
+      if (!round) return;
+      const teamId = btn.dataset.team;
+      round.teams = (round.teams || []).filter(t => String(t.id) !== String(teamId));
+      if (round.scores) delete round.scores[teamId];
+      persist().then(() => { renderSetup(); attachSetupListeners(); });
+      toast('Team removed');
+    });
+  });
+
   document.getElementById('export-btn')?.addEventListener('click', () => {
     const blob = new Blob([exportState(state)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -1057,7 +1173,7 @@ function renderAwards() {
 
   let html = `<div class="card">
     <h3>🏆 Awards Ceremony — ${state.tournamentName}</h3>
-    <p style="font-size:0.8rem;color:#6a8a6a;margin-top:0.3rem">${awards.length} awards generated from ${state.rounds.length} round(s) of data.</p>
+    <p style="font-size:0.8rem;color:#6a8a6a;margin-top:0.3rem">${awards.length} awards generated from ${state.rounds.filter(r => { const ps = state.players.filter(p => r.scores?.[p.id]?.participated); return ps.length > 0 && ps.every(p => (r.scores[p.id]?.holes || []).filter(h => h && h > 0).length === r.holes); }).length} completed round(s).</p>
   </div>`;
 
   html += '<div class="award-grid">';
@@ -1076,8 +1192,461 @@ function renderAwards() {
   container.innerHTML = html;
 }
 
+// === RENDER: Live Round ===
+let liveRoundId = null;
+let liveHoleIdx = 0;
+
+function renderLiveRound() {
+  const container = document.getElementById('liveround-content');
+  if (!state.rounds.length) {
+    container.innerHTML = '<p class="empty-state">No rounds yet. Go to Setup to create one.</p>';
+    return;
+  }
+
+  if (!liveRoundId || !state.rounds.find(r => r.id === liveRoundId)) {
+    liveRoundId = state.rounds[state.rounds.length - 1].id;
+  }
+  const round = state.rounds.find(r => r.id === liveRoundId);
+  if (!round) return;
+
+  const isScramble = round.scramble && round.teams && round.teams.length > 0;
+
+  // Scoring entities: teams for scramble, individual players otherwise
+  let scoringEntities;
+  if (isScramble) {
+    scoringEntities = round.teams.filter(t => round.scores?.[t.id]?.participated).map(t => ({ id: t.id, name: t.name }));
+  } else {
+    scoringEntities = state.players.filter(p => round.scores?.[p.id]?.participated).map(p => ({ id: p.id, name: p.name }));
+  }
+
+  const participants = state.players.filter(p => {
+    if (isScramble) {
+      return round.teams.some(t => t.players.includes(p.id) && round.scores?.[t.id]?.participated);
+    }
+    return round.scores?.[p.id]?.participated;
+  });
+
+  const par = round.pars[liveHoleIdx] || 4;
+  const holeNum = liveHoleIdx + 1;
+  const overrideKey = `${round.id}-${liveHoleIdx}`;
+  const effectiveRuleIds = state.holeRuleOverrides[overrideKey] || round.activeRules || [];
+  const holeRules = RULES_LIBRARY.filter(r => r.type === 'hole' && effectiveRuleIds.includes(r.id));
+  const isLD = (round.ldFront != null && round.ldFront === liveHoleIdx) || (round.ldBack != null && round.ldBack === liveHoleIdx);
+  const isCTP = (round.ctpFront != null && round.ctpFront === liveHoleIdx) || (round.ctpBack != null && round.ctpBack === liveHoleIdx);
+
+  let html = '';
+
+  // Round selector
+  html += '<div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.75rem;flex-wrap:wrap">';
+  html += '<select id="lr-round-select" style="background:#0f1a0f;color:#d4e8d4;border:1px solid #2a4a2a;border-radius:4px;padding:0.4rem 0.6rem;font-size:0.9rem">';
+  state.rounds.forEach(r => {
+    html += `<option value="${r.id}"${r.id === liveRoundId ? ' selected' : ''}>${r.name}</option>`;
+  });
+  html += '</select>';
+  if (!isEditor) {
+    html += '<span style="font-size:0.8rem;color:#6a8a6a">View only — sign in to edit</span>';
+  }
+  html += '</div>';
+
+  // Hole dots
+  html += '<div class="lr-hole-dots">';
+  for (let h = 0; h < round.holes; h++) {
+    const allScored = scoringEntities.length > 0 && scoringEntities.every(e => {
+      const s = round.scores?.[e.id]?.holes?.[h];
+      return s && s > 0;
+    });
+    const cls = h === liveHoleIdx ? 'current' : allScored ? 'scored' : '';
+    html += `<div class="lr-dot ${cls}" data-hole="${h}">${h + 1}</div>`;
+  }
+  html += '</div>';
+
+  // Hole navigation
+  html += '<div class="lr-hole-nav">';
+  html += `<button class="btn btn-secondary" id="lr-prev" ${liveHoleIdx <= 0 ? 'disabled' : ''}>&#9664; Prev</button>`;
+  html += `<div class="lr-hole-indicator">Hole ${holeNum} <span style="font-size:0.85rem;color:#6a8a6a">Par ${par}</span></div>`;
+  html += `<button class="btn btn-primary" id="lr-next">${liveHoleIdx >= round.holes - 1 ? 'Finish' : 'Next &#9654;'}</button>`;
+  html += '</div>';
+
+  // LD / CTP flags
+  if (isLD || isCTP) {
+    html += '<div style="text-align:center;margin-bottom:0.5rem">';
+    if (isLD) html += '<span style="color:#ffd700;font-weight:700;font-size:0.9rem;margin-right:0.5rem">🏌️ LONGEST DRIVE</span>';
+    if (isCTP) html += '<span style="color:#00bfff;font-weight:700;font-size:0.9rem">🎯 CLOSEST TO PIN</span>';
+    html += '</div>';
+  }
+
+  // Active rules for this hole
+  if (holeRules.length > 0) {
+    html += '<div class="lr-rules-section"><h4>Active Rules — Hole ' + holeNum + '</h4>';
+    holeRules.forEach(rule => {
+      const cat = RULE_CATEGORIES[rule.category];
+      const triggerText = describeRuleTrigger(rule, par);
+      html += `<div class="lr-rule-item"><span class="rule-badge ${rule.category}">${cat?.label || rule.category}</span> <strong>${rule.name}</strong> — ${triggerText}</div>`;
+    });
+    html += '</div>';
+  }
+
+  // Round-level rules reminder
+  const roundRules = RULES_LIBRARY.filter(r => r.type === 'round' && effectiveRuleIds.includes(r.id));
+  if (roundRules.length > 0) {
+    html += '<details class="lr-rules-section" style="margin-top:0.5rem" open><summary style="cursor:pointer;font-size:0.85rem;font-weight:600;color:#8fdf8f">📋 Round Rules (' + roundRules.length + ')</summary>';
+    html += '<div style="margin-top:0.4rem">';
+    roundRules.forEach(rule => {
+      const cat = RULE_CATEGORIES[rule.category];
+      html += `<div class="lr-rule-item"><span class="rule-badge ${rule.category}">${cat?.label || rule.category}</span> <strong>${rule.name}</strong> — ${rule.description}</div>`;
+    });
+    html += '</div></details>';
+  }
+
+  // Player/team participation toggles
+  if (isScramble) {
+    html += '<div class="card" style="margin-bottom:0.75rem"><span style="font-size:0.85rem;font-weight:600;color:#8fdf8f">👥 Scramble Teams (' + scoringEntities.length + ')</span>';
+    if (scoringEntities.length === 0) {
+      html += '<p style="font-size:0.8rem;color:#6a8a6a;margin-top:0.3rem">No teams set up. Go to Setup to create scramble teams.</p>';
+    } else {
+      html += '<div style="margin-top:0.3rem;font-size:0.85rem;color:#8aaa8a">';
+      scoringEntities.forEach(e => { html += `<div style="padding:0.15rem 0">${e.name}</div>`; });
+      html += '</div>';
+    }
+    html += '</div>';
+  } else if (isEditor && state.players.length > 0) {
+    const nonParticipants = state.players.filter(p => !participants.find(pp => pp.id === p.id));
+    if (nonParticipants.length > 0 || participants.length > 0) {
+      html += '<details class="card" style="margin-bottom:0.75rem"><summary style="cursor:pointer;font-size:0.85rem;font-weight:600;color:#8fdf8f">👥 Players (' + participants.length + '/' + state.players.length + ')</summary>';
+      html += '<div style="margin-top:0.5rem;display:flex;flex-direction:column;gap:0.3rem">';
+      state.players.forEach(p => {
+        const isIn = participants.find(pp => pp.id === p.id);
+        html += `<label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;padding:0.3rem 0">
+          <input type="checkbox" class="lr-participate-check" data-player="${p.id}" ${isIn ? 'checked' : ''} />
+          ${p.name}${isIn ? '' : ' <span style="color:#5a7a5a;font-size:0.7rem">(not playing)</span>'}
+        </label>`;
+      });
+      html += '</div></details>';
+    }
+  }
+
+  // Score entry cards (teams for scramble, players otherwise)
+  if (scoringEntities.length === 0) {
+    html += '<div class="card"><p class="empty-state">No ' + (isScramble ? 'teams' : 'players') + ' participating in this round.' + (isEditor ? (isScramble ? ' Go to Setup to create scramble teams.' : ' Check the Players section above to add them.') : '') + '</p></div>';
+  }
+
+  scoringEntities.forEach(entity => {
+    const pd = round.scores?.[entity.id];
+    const currentScore = pd?.holes?.[liveHoleIdx] || 0;
+    const scoreClass = currentScore > 0
+      ? (currentScore < par ? (currentScore <= par - 2 ? 'eagle' : 'birdie') : currentScore === par ? 'par' : 'bogey')
+      : '';
+
+    let runningRaw = 0;
+    let runningPar = 0;
+    for (let h = 0; h <= liveHoleIdx; h++) {
+      const s = pd?.holes?.[h];
+      if (s && s > 0) { runningRaw += s; runningPar += (round.pars[h] || 4); }
+    }
+
+    html += `<div class="lr-player-card">`;
+    html += `<div class="lr-player-header">`;
+    html += `<span class="lr-player-name">${entity.name}</span>`;
+    html += `<span class="lr-player-running">${runningRaw > 0 ? `${runningRaw} (${runningRaw - runningPar >= 0 ? '+' : ''}${runningRaw - runningPar})` : '—'}</span>`;
+    html += `</div>`;
+    html += `<div class="lr-score-row">`;
+    html += `<div class="lr-stepper">`;
+    html += `<button class="lr-stepper-btn" data-player="${entity.id}" data-dir="-1"${!isEditor ? ' disabled' : ''}>−</button>`;
+    html += `<div class="lr-stepper-val ${scoreClass}">${currentScore > 0 ? currentScore : '—'}</div>`;
+    html += `<button class="lr-stepper-btn" data-player="${entity.id}" data-dir="1"${!isEditor ? ' disabled' : ''}>+</button>`;
+    html += `</div>`;
+    if (currentScore > 0) {
+      const diff = currentScore - par;
+      const label = diff === 0 ? 'Par' : diff === -1 ? 'Birdie' : diff === -2 ? 'Eagle' : diff <= -3 ? 'Albatross!' : diff === 1 ? 'Bogey' : diff === 2 ? 'Dbl Bogey' : `+${diff}`;
+      const labelColor = diff < 0 ? '#6ecf6e' : diff === 0 ? '#d4e8d4' : '#df8f8f';
+      html += `<span style="font-size:0.9rem;font-weight:600;color:${labelColor};min-width:70px;text-align:right">${label}</span>`;
+    }
+    html += `</div>`;
+    html += `</div>`;
+  });
+
+
+  // Running scoreboard
+  if (scoringEntities.length > 0) {
+    html += '<div class="lr-running-board"><table><thead><tr><th style="text-align:left">' + (isScramble ? 'Team' : 'Player') + '</th><th>Thru</th><th>Raw</th><th>To Par</th></tr></thead><tbody>';
+    const board = scoringEntities.map(entity => {
+      const pd = round.scores?.[entity.id];
+      let raw = 0, parTotal = 0, holesPlayed = 0;
+      for (let h = 0; h < round.holes; h++) {
+        const s = pd?.holes?.[h];
+        if (s && s > 0) { raw += s; parTotal += (round.pars[h] || 4); holesPlayed++; }
+      }
+      return { name: entity.name, raw, toPar: raw - parTotal, holesPlayed };
+    }).sort((a, b) => {
+      if (a.holesPlayed === 0 && b.holesPlayed === 0) return 0;
+      if (a.holesPlayed === 0) return 1;
+      if (b.holesPlayed === 0) return -1;
+      return a.toPar - b.toPar;
+    });
+    board.forEach((p, i) => {
+      const toParStr = p.holesPlayed > 0 ? (p.toPar > 0 ? `+${p.toPar}` : p.toPar === 0 ? 'E' : `${p.toPar}`) : '—';
+      const rankIcon = i === 0 && p.holesPlayed > 0 ? '🥇 ' : '';
+      html += `<tr><td style="text-align:left">${rankIcon}${p.name}</td><td>${p.holesPlayed}</td><td>${p.holesPlayed > 0 ? p.raw : '—'}</td><td style="color:${p.toPar < 0 ? '#6ecf6e' : p.toPar > 0 ? '#df8f8f' : '#d4e8d4'}">${toParStr}</td></tr>`;
+    });
+    html += '</tbody></table></div>';
+  }
+
+  container.innerHTML = html;
+
+  // --- Attach event listeners ---
+  document.getElementById('lr-round-select')?.addEventListener('change', (e) => {
+    liveRoundId = e.target.value;
+    liveHoleIdx = 0;
+    renderLiveRound();
+  });
+
+  document.getElementById('lr-prev')?.addEventListener('click', () => {
+    if (liveHoleIdx > 0) { liveHoleIdx--; renderLiveRound(); }
+  });
+
+  document.getElementById('lr-next')?.addEventListener('click', () => {
+    if (liveHoleIdx < round.holes - 1) { liveHoleIdx++; renderLiveRound(); }
+    else { toast('Round complete!'); }
+  });
+
+  container.querySelectorAll('.lr-dot').forEach(dot => {
+    dot.addEventListener('click', () => {
+      liveHoleIdx = parseInt(dot.dataset.hole);
+      renderLiveRound();
+    });
+  });
+
+  container.querySelectorAll('.lr-stepper-btn:not(.lr-beer-btn):not(.lr-meat-btn)').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (!isEditor) return;
+      const entityId = btn.dataset.player;
+      const dir = parseInt(btn.dataset.dir);
+      const holeIdx = liveHoleIdx;
+      const roundId = round.id;
+
+      // Optimistic local update for instant feedback
+      ensureScoreData(roundId, entityId);
+      const pd = round.scores[entityId];
+      const current = pd.holes[holeIdx] || 0;
+      const newVal = Math.max(0, current + dir);
+      pd.holes[holeIdx] = newVal > 0 ? newVal : null;
+      renderLiveRound();
+
+      // Atomic Firestore transaction to prevent clobbering
+      transactionalUpdate((s) => {
+        const r = s.rounds.find(r => String(r.id) === String(roundId));
+        if (!r) return;
+        if (!r.scores) r.scores = {};
+        if (!r.scores[entityId]) {
+          r.scores[entityId] = { holes: new Array(r.holes).fill(null), beers: 0, participated: true };
+        }
+        const cur = r.scores[entityId].holes[holeIdx] || 0;
+        const nv = Math.max(0, cur + dir);
+        r.scores[entityId].holes[holeIdx] = nv > 0 ? nv : null;
+      }).then(updated => {
+        if (updated) state = updated;
+      });
+    });
+  });
+
+  container.querySelectorAll('.lr-participate-check').forEach(cb => {
+    cb.addEventListener('change', () => {
+      if (!isEditor) return;
+      const playerId = cb.dataset.player;
+      const roundId = round.id;
+      const checked = cb.checked;
+
+      ensureScoreData(roundId, playerId);
+      round.scores[playerId].participated = checked;
+      renderLiveRound();
+
+      transactionalUpdate((s) => {
+        const r = s.rounds.find(r => String(r.id) === String(roundId));
+        if (!r) return;
+        if (!r.scores) r.scores = {};
+        if (!r.scores[playerId]) {
+          r.scores[playerId] = { holes: new Array(r.holes).fill(null), beers: 0, participated: true };
+        }
+        r.scores[playerId].participated = checked;
+      }).then(updated => {
+        if (updated) state = updated;
+      });
+    });
+  });
+
+}
+
+function describeRuleTrigger(rule, par) {
+  const triggers = {
+    'birdie-bonus': `Score ${par - 1} (birdie) → -1`,
+    'eagle-jackpot': `Score ${par - 2} or less (eagle+) → -3`,
+    'double-bogey-tax': `Score ${par + 2}+ (double bogey) → +1`,
+    'snowman-shame': `Score 8+ → +2`,
+    'lucky-seven': `Score exactly 7 → -2`,
+    'beer-per-birdie': `Score under par → +1 beer`,
+    'hole-in-one': `Score 1 → -5`,
+    'triple-bogey-blowup': `Score ${par + 3}+ → +3`,
+    'the-deuce': `Score 2 → -2`,
+    'par-3-hero': par === 3 ? `Par or better on par 3 → -1` : `Only on par 3 holes`,
+    'par-5-survivor': par === 5 ? `Par or better on par 5 → -1` : `Only on par 5 holes`,
+    'the-six-pack': `Score 6 → free beer`,
+    'the-double-down': `Score ${par * 2} (double par) → +2`,
+    'beer-bogey-combo': `Bogey (${par + 1}) with 3+ beers → -1`,
+    'the-perfect-ten': `Score 10 → free beer`,
+  };
+  return triggers[rule.id] || rule.description;
+}
+
+function getPersonalizedTips(player, round, holeIdx, effectiveRuleIds, currentScore) {
+  const tips = [];
+  const pd = round.scores?.[player.id];
+  const holes = pd?.holes || [];
+  const par = round.pars[holeIdx] || 4;
+
+  // Build the array of scores so far (completed holes) for pattern detection
+  const prevScores = [];
+  for (let h = 0; h < holeIdx; h++) {
+    const s = holes[h];
+    if (s && s > 0) prevScores.push(s);
+  }
+
+  // Hat Trick: same score 3 in a row
+  if (effectiveRuleIds.includes('the-hat-trick') && prevScores.length >= 2) {
+    const last2 = prevScores.slice(-2);
+    if (last2[0] === last2[1]) {
+      tips.push({ type: 'bonus', icon: '🎩', text: `Score ${last2[0]} for a Hat Trick (-1)` });
+    }
+  }
+
+  // The Staircase: 3+ scores going up by 1
+  if (effectiveRuleIds.includes('the-staircase') && prevScores.length >= 2) {
+    let stairLen = 1;
+    for (let i = prevScores.length - 1; i > 0; i--) {
+      if (prevScores[i] === prevScores[i - 1] + 1) stairLen++;
+      else break;
+    }
+    if (stairLen >= 2) {
+      const nextStair = prevScores[prevScores.length - 1] + 1;
+      tips.push({ type: 'penalty', icon: '📈', text: `Avoid ${nextStair} — would trigger Staircase (+1)` });
+    }
+  }
+
+  // The Slide: 3+ scores going down by 1
+  if (effectiveRuleIds.includes('the-slide') && prevScores.length >= 2) {
+    let slideLen = 1;
+    for (let i = prevScores.length - 1; i > 0; i--) {
+      if (prevScores[i] === prevScores[i - 1] - 1) slideLen++;
+      else break;
+    }
+    if (slideLen >= 2) {
+      const nextSlide = prevScores[prevScores.length - 1] - 1;
+      if (nextSlide > 0) {
+        tips.push({ type: 'bonus', icon: '🛝', text: `Score ${nextSlide} to trigger The Slide (-2)` });
+      }
+    }
+  }
+
+  // Par Streak: 3+ consecutive pars
+  if (effectiveRuleIds.includes('par-streak') && prevScores.length >= 2) {
+    let parStreak = 0;
+    for (let i = prevScores.length - 1; i >= 0; i--) {
+      const holePar = round.pars[i] || 4;
+      if (prevScores[i] === holePar) parStreak++;
+      else break;
+    }
+    if (parStreak >= 2) {
+      tips.push({ type: 'bonus', icon: '🎯', text: `Score ${par} (par) to extend par streak to ${parStreak + 1}${parStreak === 2 ? ' and trigger -2 bonus!' : '+'}` });
+    }
+  }
+
+  // Bogey Train: 3+ bogeys in a row
+  if (effectiveRuleIds.includes('bogey-train') && prevScores.length >= 2) {
+    let bogeyStreak = 0;
+    for (let i = prevScores.length - 1; i >= 0; i--) {
+      const holePar = round.pars[i] || 4;
+      if (prevScores[i] === holePar + 1) bogeyStreak++;
+      else break;
+    }
+    if (bogeyStreak >= 2) {
+      tips.push({ type: 'penalty', icon: '🚂', text: `Avoid ${par + 1} (bogey) — would trigger Bogey Train (+2)` });
+    }
+  }
+
+  // Foursome Special: 4 fours in a row
+  if (effectiveRuleIds.includes('foursome-special') && prevScores.length >= 3) {
+    let fourStreak = 0;
+    for (let i = prevScores.length - 1; i >= 0; i--) {
+      if (prevScores[i] === 4) fourStreak++;
+      else break;
+    }
+    if (fourStreak >= 3) {
+      tips.push({ type: 'bonus', icon: '4️⃣', text: `Score 4 to complete a Foursome Special (-2)` });
+    }
+  }
+
+  // The Sandwich: same score on holes N and N+2
+  if (effectiveRuleIds.includes('the-sandwich') && prevScores.length >= 2) {
+    const twoBack = prevScores[prevScores.length - 2];
+    const oneBack = prevScores[prevScores.length - 1];
+    if (twoBack !== oneBack) {
+      tips.push({ type: 'bonus', icon: '🥪', text: `Score ${twoBack} for a Sandwich (same as 2 holes ago)` });
+    }
+  }
+
+  // The Yo-Yo: alternating up-down
+  if (effectiveRuleIds.includes('the-yo-yo') && prevScores.length >= 3) {
+    let yoyoLen = 1;
+    for (let i = prevScores.length - 1; i >= 2; i--) {
+      const prev = prevScores[i] - prevScores[i - 1];
+      const prevPrev = prevScores[i - 1] - prevScores[i - 2];
+      if ((prev > 0 && prevPrev < 0) || (prev < 0 && prevPrev > 0)) yoyoLen++;
+      else break;
+    }
+    if (yoyoLen >= 3) {
+      const lastDir = prevScores[prevScores.length - 1] - prevScores[prevScores.length - 2];
+      if (lastDir > 0) {
+        tips.push({ type: 'bonus', icon: '🪀', text: `Score lower than ${prevScores[prevScores.length - 1]} to extend Yo-Yo${yoyoLen === 3 ? ' and trigger -2!' : ''}` });
+      } else if (lastDir < 0) {
+        tips.push({ type: 'bonus', icon: '🪀', text: `Score higher than ${prevScores[prevScores.length - 1]} to extend Yo-Yo${yoyoLen === 3 ? ' and trigger -2!' : ''}` });
+      }
+    }
+  }
+
+  // The Fiver: 5 fives total
+  if (effectiveRuleIds.includes('the-fiver')) {
+    const fiveCount = prevScores.filter(s => s === 5).length;
+    if (fiveCount >= 4) {
+      tips.push({ type: 'bonus', icon: '🖐️', text: `Score 5 for your ${fiveCount + 1}th five — triggers The Fiver (-2)!` });
+    } else if (fiveCount >= 2) {
+      tips.push({ type: 'fun', icon: '🖐️', text: `${fiveCount} fives so far — need ${5 - fiveCount} more for The Fiver (-2)` });
+    }
+  }
+
+  // General score-based tips if nothing personalized
+  const activeHoleRules = RULES_LIBRARY.filter(r => r.type === 'hole' && effectiveRuleIds.includes(r.id));
+  if (tips.length === 0 && activeHoleRules.length > 0) {
+    const bonusScores = [];
+    for (const rule of activeHoleRules) {
+      if (rule.id === 'birdie-bonus' && par - 1 > 0) bonusScores.push(par - 1);
+      if (rule.id === 'eagle-jackpot' && par - 2 > 0) bonusScores.push(par - 2);
+      if (rule.id === 'the-deuce') bonusScores.push(2);
+      if (rule.id === 'par-3-hero' && par === 3) bonusScores.push(3);
+      if (rule.id === 'par-5-survivor' && par === 5) bonusScores.push(5);
+    }
+    if (bonusScores.length > 0) {
+      const best = Math.min(...bonusScores);
+      tips.push({ type: 'bonus', icon: '🎯', text: `Target: ${best} for maximum bonus` });
+    }
+  }
+
+  return tips;
+}
+
 // === Render All ===
-// --- OpenGolfAPI Course Search ---
+// --- GolfCourseAPI Course Search ---
+const GOLF_API_KEY = 'DFED3RLNN5GJIJFH7CMCCRJDYI';
+const GOLF_API_BASE = 'https://api.golfcourseapi.com/v1';
+
 async function searchCourses() {
   const input = document.getElementById('course-search-input');
   const resultsDiv = document.getElementById('course-search-results');
@@ -1087,7 +1656,9 @@ async function searchCourses() {
   resultsDiv.innerHTML = '<p style="font-size:0.8rem;color:#6a8a6a">Searching...</p>';
 
   try {
-    const resp = await fetch(`https://api.opengolfapi.org/v1/courses/search?q=${encodeURIComponent(query)}`);
+    const resp = await fetch(`${GOLF_API_BASE}/search?search_query=${encodeURIComponent(query)}`, {
+      headers: { 'Authorization': `Key ${GOLF_API_KEY}` }
+    });
     if (!resp.ok) throw new Error('API error ' + resp.status);
     const data = await resp.json();
     const courses = data.courses || [];
@@ -1097,22 +1668,26 @@ async function searchCourses() {
       return;
     }
 
-    resultsDiv.innerHTML = courses.slice(0, 15).map(c => `
+    resultsDiv.innerHTML = courses.slice(0, 15).map(c => {
+      const loc = c.location || {};
+      const tee = c.tees?.male?.[0] || c.tees?.female?.[0];
+      const holes = tee?.number_of_holes || '?';
+      const par = tee?.par_total || '?';
+      return `
       <div class="course-result" data-course-id="${c.id}" style="display:flex;justify-content:space-between;align-items:center;padding:0.4rem 0.5rem;border-bottom:1px solid #1a2e1a;cursor:pointer;transition:background 0.1s" onmouseover="this.style.background='#1a2e1a'" onmouseout="this.style.background='transparent'">
         <div>
           <div style="font-weight:600;font-size:0.85rem">${c.course_name || c.club_name || 'Unknown'}</div>
-          <div style="font-size:0.75rem;color:#6a8a6a">${c.city || ''}${c.state ? ', ' + c.state : ''} · ${c.course_type || ''} · ${c.holes_count || '?'} holes · Par ${c.par_total || '?'}${c.year_built ? ' · ' + c.year_built : ''}</div>
+          <div style="font-size:0.75rem;color:#6a8a6a">${loc.city || ''}${loc.state ? ', ' + loc.state : ''} · ${holes} holes · Par ${par}</div>
         </div>
         <button class="btn btn-primary btn-small" data-select-course="${c.id}">Select</button>
-      </div>
-    `).join('');
+      </div>`;
+    }).join('');
 
-    // Bind select buttons
     resultsDiv.querySelectorAll('[data-select-course]').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const courseId = btn.dataset.selectCourse;
-        await selectCourse(courseId, courses.find(c => c.id === courseId));
+        await selectCourse(courseId, courses.find(c => String(c.id) === String(courseId)));
       });
     });
   } catch (err) {
@@ -1120,53 +1695,42 @@ async function searchCourses() {
   }
 }
 
-async function selectCourse(courseId, basicData) {
+async function selectCourse(courseId, course) {
   const resultsDiv = document.getElementById('course-search-results');
 
-  // Try to get detailed course data (may include scorecard)
-  let course = basicData;
-  try {
-    const resp = await fetch(`https://api.opengolfapi.org/v1/courses/${courseId}`);
-    if (resp.ok) {
-      const detailed = await resp.json();
-      if (detailed) course = detailed;
-    }
-  } catch (e) { /* use basic data */ }
-
   const name = course.course_name || course.club_name || 'Unknown Course';
-  const holes = course.holes_count || 18;
+  const loc = course.location || {};
+  const tee = course.tees?.male?.[0] || course.tees?.female?.[0];
+  const holes = tee?.number_of_holes || 18;
+  const parTotal = tee?.par_total || null;
 
-  // Extract pars from scorecard if available
   let pars = null;
-  if (course.scorecard && Array.isArray(course.scorecard) && course.scorecard.length > 0) {
-    pars = course.scorecard.sort((a, b) => a.hole - b.hole).map(h => h.par || 4);
+  if (tee?.holes && Array.isArray(tee.holes) && tee.holes.length > 0) {
+    pars = tee.holes.map(h => h.par || 4);
   }
 
-  // Fill in the round form
   document.getElementById('new-round-name').value = name;
   const holesSelect = document.getElementById('new-round-holes');
   if (holes <= 9) holesSelect.value = '9';
   else holesSelect.value = '18';
 
-  // Store course info for when the round is created
   window._pendingCourseInfo = {
     id: courseId,
     name,
-    city: course.city || '',
-    state: course.state || '',
-    type: course.course_type || '',
-    par: course.par_total || null,
+    city: loc.city || '',
+    state: loc.state || '',
+    type: '',
+    par: parTotal,
     holes: holes,
-    year_built: course.year_built || null,
-    phone: course.phone || '',
-    website: course.website || '',
-    latitude: course.latitude || null,
-    longitude: course.longitude || null,
-    address: course.address || '',
+    year_built: null,
+    phone: '',
+    website: '',
+    latitude: loc.latitude || null,
+    longitude: loc.longitude || null,
+    address: loc.address || '',
     pars: pars
   };
 
-  // If we got pars, we'll apply them after the round is created
   if (pars) {
     window._pendingCoursePars = pars;
   }
@@ -1174,7 +1738,7 @@ async function selectCourse(courseId, basicData) {
   resultsDiv.innerHTML = `
     <div style="padding:0.5rem;background:#1a2e1a;border-radius:4px;font-size:0.85rem">
       <strong style="color:#8fdf8f">✓ Selected: ${name}</strong>
-      <div style="color:#6a8a6a;font-size:0.8rem">${course.city || ''}${course.state ? ', ' + course.state : ''} · Par ${course.par_total || '?'} · ${holes} holes</div>
+      <div style="color:#6a8a6a;font-size:0.8rem">${loc.city || ''}${loc.state ? ', ' + loc.state : ''} · Par ${parTotal || '?'} · ${holes} holes</div>
       ${pars ? `<div style="color:#6a8a6a;font-size:0.75rem;margin-top:0.3rem">Pars: ${pars.join(', ')}</div>` : '<div style="color:#6a8a6a;font-size:0.75rem;margin-top:0.3rem">No hole-by-hole par data available — you can enter pars manually after adding the round.</div>'}
       <div style="margin-top:0.3rem;font-size:0.75rem;color:#6a8a6a">Click "Add Round" to create the round with this course.</div>
     </div>
@@ -1370,6 +1934,7 @@ function renderHoleGuideForRound(roundId) {
 
 function renderAll() {
   renderStandings();
+  renderLiveRound();
   renderScorecard();
   renderHoleGuide();
   renderRulesLibrary();

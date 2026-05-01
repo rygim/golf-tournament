@@ -128,6 +128,32 @@ export async function saveState(state) {
 }
 
 /**
+ * Atomically update the state document using a Firestore transaction.
+ * `mutator(state)` receives the latest state from Firestore, mutates it in place,
+ * and the result is written back. This prevents concurrent writes from clobbering each other.
+ * Returns the updated state, or null on failure.
+ */
+export async function transactionalUpdate(mutator) {
+  if (!_firestore || !_firestoreModules) return null;
+  try {
+    const { doc, runTransaction } = _firestoreModules;
+    const ref = doc(_firestore, TOURNAMENT_DOC);
+    const result = await runTransaction(_firestore, async (txn) => {
+      const snap = await txn.get(ref);
+      const data = snap.exists() ? snap.data() : createDefaultState();
+      mutator(data);
+      txn.set(ref, data);
+      return data;
+    });
+    _saveToLocalStorage(result);
+    return result;
+  } catch (e) {
+    console.warn('Transactional update failed:', e.code || e.message);
+    return null;
+  }
+}
+
+/**
  * Subscribe to real-time state updates from Firestore.
  * Calls onChange(newState) whenever another client saves.
  * Returns an unsubscribe function.

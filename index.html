@@ -78,18 +78,72 @@
     .award-winner { font-size: 1.1rem; font-weight: 700; color: #ffd700; margin-top: 0.15rem; }
     .award-detail { font-size: 0.8rem; color: #6a8a6a; margin-top: 0.2rem; }
     .award-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 0.75rem; }
+    /* Live Round styles */
+    .lr-hole-nav { display: flex; align-items: center; justify-content: center; gap: 0.75rem; margin-bottom: 1rem; flex-wrap: wrap; }
+    .lr-hole-nav .btn { min-width: 48px; min-height: 48px; font-size: 1.2rem; }
+    .lr-hole-indicator { font-size: 1.3rem; font-weight: 700; color: #8fdf8f; min-width: 120px; text-align: center; }
+    .lr-hole-dots { display: flex; gap: 4px; justify-content: center; flex-wrap: wrap; margin-bottom: 0.75rem; }
+    .lr-dot { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #2a4a2a; background: #0f1a0f; font-size: 0.6rem; display: flex; align-items: center; justify-content: center; color: #5a7a5a; cursor: pointer; transition: all 0.15s; }
+    .lr-dot.current { border-color: #6ecf6e; background: #2d5a2d; color: #fff; font-weight: 700; }
+    .lr-dot.scored { background: #1a3a1a; border-color: #4a7a4a; color: #8fdf8f; }
+    .lr-player-card { background: #1a2e1a; border: 1px solid #2a4a2a; border-radius: 8px; padding: 0.75rem; margin-bottom: 0.6rem; }
+    .lr-player-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+    .lr-player-name { font-weight: 700; font-size: 1rem; color: #d4e8d4; }
+    .lr-player-running { font-size: 0.85rem; color: #6a8a6a; }
+    .lr-stepper { display: flex; align-items: center; gap: 0; }
+    .lr-stepper-btn { width: 52px; height: 52px; border: 1px solid #2a4a2a; background: #0f1a0f; color: #8fdf8f; font-size: 1.5rem; font-weight: 700; cursor: pointer; transition: background 0.15s; display: flex; align-items: center; justify-content: center; }
+    .lr-stepper-btn:first-child { border-radius: 8px 0 0 8px; }
+    .lr-stepper-btn:last-child { border-radius: 0 8px 8px 0; }
+    .lr-stepper-btn:active { background: #2d5a2d; }
+    .lr-stepper-val { width: 56px; height: 52px; border: 1px solid #2a4a2a; border-left: none; border-right: none; background: #0a140a; color: #d4e8d4; font-size: 1.4rem; font-weight: 700; text-align: center; display: flex; align-items: center; justify-content: center; }
+    .lr-stepper-val.birdie { color: #6ecf6e; }
+    .lr-stepper-val.bogey { color: #df8f8f; }
+    .lr-stepper-val.eagle { color: #ffd700; }
+    .lr-stepper-val.par { color: #d4e8d4; }
+    .lr-score-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+    .lr-tips { font-size: 0.78rem; color: #6a8a6a; margin-top: 0.4rem; padding-top: 0.4rem; border-top: 1px solid #1a2e1a; }
+    .lr-tip-bonus { color: #6ecf6e; }
+    .lr-tip-penalty { color: #cf6e6e; }
+    .lr-tip-fun { color: #a0a0cf; }
+    .lr-rules-section { background: #0f1a0f; border: 1px solid #2a4a2a; border-radius: 8px; padding: 0.6rem 0.75rem; margin-bottom: 0.75rem; }
+    .lr-rules-section h4 { font-size: 0.85rem; color: #8fdf8f; margin-bottom: 0.4rem; }
+    .lr-rule-item { font-size: 0.78rem; padding: 0.15rem 0; }
+    .lr-running-board { background: #0a140a; border: 1px solid #2a4a2a; border-radius: 8px; padding: 0.5rem; margin-top: 0.75rem; }
+    .lr-running-board table { width: 100%; }
+    .lr-running-board th { font-size: 0.75rem; padding: 0.25rem 0.4rem; }
+    .lr-running-board td { font-size: 0.85rem; padding: 0.25rem 0.4rem; }
+    .lr-beer-section { background: #1a2e1a; border: 1px solid #2a4a2a; border-radius: 8px; padding: 0.6rem 0.75rem; margin-top: 0.75rem; }
+    .lr-beer-row { display: flex; align-items: center; justify-content: space-between; padding: 0.3rem 0; }
+    .lr-beer-name { font-size: 0.9rem; }
     @media (max-width: 768px) {
       body { overflow: auto; }
       a[href="/"] { padding: 10px 16px; }
-      .btn { min-height: 44px; }
+      .btn { min-height: 44px; min-width: 44px; }
+      .btn-small { min-height: 36px; min-width: unset; font-size: 0.75rem; }
       .app { padding: 0.5rem; }
-      .form-row { flex-direction: column; }
+      .form-row { flex-direction: column; align-items: stretch; }
+      .form-row .form-group { width: 100%; }
+      .form-row input[type="text"],
+      .form-row input[type="email"],
+      .form-row input[type="number"],
+      .form-row select { width: 100% !important; max-width: 100% !important; box-sizing: border-box; }
+      .form-row > .btn { width: 100%; }
       .header { flex-direction: column; align-items: flex-start; }
       .card { padding: .8rem; }
-      .scorecard-scroll { overflow-x: auto; }
-      .form-row { flex-wrap: wrap; }
-      table { display: block; overflow-x: auto; }
+      .scorecard-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+      table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+      .tabs { flex-wrap: wrap; gap: 0; }
+      .tab { flex: 1 1 auto; padding: 0.5rem 0.4rem; font-size: 0.75rem; text-align: center; min-height: 44px; display: flex; align-items: center; justify-content: center; }
       .award-grid { grid-template-columns: 1fr; }
+      .award-card { flex-direction: column; align-items: center; text-align: center; }
+      .lr-stepper-btn { width: 60px; height: 56px; font-size: 1.7rem; }
+      .lr-stepper-val { width: 64px; height: 56px; font-size: 1.5rem; }
+      .lr-hole-dots { gap: 3px; }
+      .lr-dot { width: 26px; height: 26px; font-size: 0.65rem; }
+      .lr-player-card { padding: 0.6rem; }
+      .lr-hole-nav .btn { min-width: 60px; }
+      .rule-chip { font-size: 0.65rem; padding: 0.2rem 0.4rem; }
+      .rule-selector { gap: 0.25rem; }
     }
   </style>
 </head>
@@ -108,6 +162,7 @@
 
     <div class="tabs" role="tablist">
       <button class="tab active" data-tab="standings" role="tab">Standings</button>
+      <button class="tab" data-tab="liveround" role="tab">Live Round</button>
       <button class="tab" data-tab="scorecard" role="tab">Scorecard</button>
       <button class="tab" data-tab="holeguide" role="tab">⛳ Hole Guide</button>
       <button class="tab" data-tab="awards" role="tab">🏆 Awards</button>
@@ -117,6 +172,10 @@
 
     <div id="standings-panel" class="panel active" role="tabpanel">
       <div id="standings-content"><p class="empty-state">No tournament data yet. Go to Setup to get started.</p></div>
+    </div>
+
+    <div id="liveround-panel" class="panel" role="tabpanel">
+      <div id="liveround-content"><p class="empty-state">Set up a tournament first.</p></div>
     </div>
 
     <div id="scorecard-panel" class="panel" role="tabpanel">
@@ -142,6 +201,6 @@
     <div class="toast" id="toast"></div>
   </div>
 
-  <script type="module" src="app.js?v=20260430b"></script>
+  <script type="module" src="app.js?v=20260501g"></script>
 </body>
 </html>
