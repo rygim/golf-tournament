@@ -587,7 +587,7 @@ function renderSetup() {
   html += `<div class="card"><h3>Tournament Settings</h3>
     <div class="form-row">
       <div class="form-group"><label>Tournament Name</label>
-        <input type="text" id="tournament-name" value="${state.tournamentName}" style="width:250px" />
+        <input type="text" id="tournament-name" value="${state.tournamentName}" style="width:250px;max-width:100%" />
       </div>
       <button class="btn btn-primary btn-small" id="save-name-btn">Save</button>
     </div>
@@ -620,7 +620,7 @@ function renderSetup() {
     <div id="editor-list" style="margin-bottom:0.5rem"><p style="font-size:0.8rem;color:#6a8a6a">Loading editors...</p></div>
     <div class="form-row">
       <div class="form-group"><label>Add Editor Email</label>
-        <input type="email" id="new-editor-email" placeholder="email@example.com" style="width:250px" />
+        <input type="email" id="new-editor-email" placeholder="email@example.com" style="width:250px;max-width:100%" />
       </div>
       <button class="btn btn-primary btn-small" id="add-editor-btn">Add Editor</button>
     </div>
@@ -630,7 +630,7 @@ function renderSetup() {
   html += `<div class="card"><h3>Players (${state.players.length})</h3>
     <div class="form-row">
       <div class="form-group"><label>Player Name</label>
-        <input type="text" id="new-player-name" placeholder="e.g. Tiger" style="width:180px" />
+        <input type="text" id="new-player-name" placeholder="e.g. Tiger" style="width:180px;max-width:100%" />
       </div>
       <div class="form-group"><label>Handicap</label>
         <input type="number" id="new-player-handicap" min="0" max="54" value="0" style="width:60px" />
@@ -657,7 +657,7 @@ function renderSetup() {
       <p style="font-size:0.75rem;color:#6a8a6a;margin:0.2rem 0 0.4rem">Search for a course to auto-fill pars and course info. <a href="https://golfcourseapi.com" target="_blank" rel="noopener">Data from GolfCourseAPI</a></p>
       <div class="form-row">
         <div class="form-group"><label>Course Name or City</label>
-          <input type="text" id="course-search-input" placeholder="e.g. Pebble Beach, Augusta" style="width:250px" />
+          <input type="text" id="course-search-input" placeholder="e.g. Pebble Beach, Augusta" style="width:250px;max-width:100%" />
         </div>
         <button class="btn btn-primary btn-small" id="course-search-btn">🔍 Search</button>
       </div>
@@ -665,7 +665,7 @@ function renderSetup() {
     </div>
     <div class="form-row">
       <div class="form-group"><label>Round Name</label>
-        <input type="text" id="new-round-name" placeholder="e.g. Saturday AM" style="width:150px" />
+        <input type="text" id="new-round-name" placeholder="e.g. Saturday AM" style="width:150px;max-width:100%" />
       </div>
       <div class="form-group"><label>Holes</label>
         <select id="new-round-holes">
@@ -719,7 +719,7 @@ function renderSetup() {
       <div style="margin-top:0.4rem">
         <label>Pars (comma-separated or set all):</label>
         <div class="form-row">
-          <input type="text" class="par-input" data-round="${round.id}" value="${(round.pars || []).join(',')}" style="width:300px" placeholder="4,3,5,4,..." />
+          <input type="text" class="par-input" data-round="${round.id}" value="${(round.pars || []).join(',')}" style="width:300px;max-width:100%" placeholder="4,3,5,4,..." />
           <select class="par-preset" data-round="${round.id}">
             <option value="">Set all to...</option>
             <option value="3">All Par 3</option>

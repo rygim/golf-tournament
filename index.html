@@ -118,15 +118,32 @@
     @media (max-width: 768px) {
       body { overflow: auto; }
       a[href="/"] { padding: 10px 16px; }
-      .btn { min-height: 44px; }
+      .btn { min-height: 44px; min-width: 44px; }
+      .btn-small { min-height: 36px; min-width: unset; font-size: 0.75rem; }
       .app { padding: 0.5rem; }
-      .form-row { flex-direction: column; }
+      .form-row { flex-direction: column; align-items: stretch; }
+      .form-row .form-group { width: 100%; }
+      .form-row input[type="text"],
+      .form-row input[type="email"],
+      .form-row input[type="number"],
+      .form-row select { width: 100% !important; max-width: 100% !important; box-sizing: border-box; }
+      .form-row > .btn { width: 100%; }
       .header { flex-direction: column; align-items: flex-start; }
       .card { padding: .8rem; }
-      .scorecard-scroll { overflow-x: auto; }
-      .form-row { flex-wrap: wrap; }
-      table { display: block; overflow-x: auto; }
+      .scorecard-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+      table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+      .tabs { flex-wrap: wrap; gap: 0; }
+      .tab { flex: 1 1 auto; padding: 0.5rem 0.4rem; font-size: 0.75rem; text-align: center; min-height: 44px; display: flex; align-items: center; justify-content: center; }
       .award-grid { grid-template-columns: 1fr; }
+      .award-card { flex-direction: column; align-items: center; text-align: center; }
+      .lr-stepper-btn { width: 60px; height: 56px; font-size: 1.7rem; }
+      .lr-stepper-val { width: 64px; height: 56px; font-size: 1.5rem; }
+      .lr-hole-dots { gap: 3px; }
+      .lr-dot { width: 26px; height: 26px; font-size: 0.65rem; }
+      .lr-player-card { padding: 0.6rem; }
+      .lr-hole-nav .btn { min-width: 60px; }
+      .rule-chip { font-size: 0.65rem; padding: 0.2rem 0.4rem; }
+      .rule-selector { gap: 0.25rem; }
     }
   </style>
 </head>
@@ -184,6 +201,6 @@
     <div class="toast" id="toast"></div>
   </div>
 
-  <script type="module" src="app.js?v=20260501f"></script>
+  <script type="module" src="app.js?v=20260501g"></script>
 </body>
 </html>
