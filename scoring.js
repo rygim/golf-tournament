@@ -89,7 +89,12 @@ export function calculateStandings(state) {
     const playerHandicap = player.handicap || 0;
 
     for (const round of rounds) {
-      const result = calculateRoundScore(round, player.id, holeRuleOverrides);
+      let scoreKey = player.id;
+      if (round.scramble && round.teams) {
+        const team = round.teams.find(t => t.players.includes(player.id));
+        if (team) scoreKey = team.id;
+      }
+      const result = calculateRoundScore(round, scoreKey, holeRuleOverrides);
       if (result) {
         // Handicap: full for 18 holes, half (rounded) for 9
         const hcpStrokes = round.holes >= 18 ? playerHandicap : Math.round(playerHandicap / 2);

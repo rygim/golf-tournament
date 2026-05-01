@@ -13,11 +13,34 @@ export function computeAwards(state) {
 
   const awards = [];
 
-  // Helper: get all hole scores for a player across all rounds
+  // Only consider completed rounds
+  const completedRounds = state.rounds.filter(round => {
+    const scramble = round.scramble && round.teams && round.teams.length > 0;
+    if (scramble) {
+      const teams = round.teams.filter(t => round.scores?.[t.id]?.participated);
+      return teams.length > 0 && teams.every(t => {
+        const holes = round.scores[t.id]?.holes || [];
+        return holes.filter(h => h && h > 0).length === round.holes;
+      });
+    }
+    const participants = state.players.filter(p => round.scores?.[p.id]?.participated);
+    return participants.length > 0 && participants.every(p => {
+      const holes = round.scores[p.id]?.holes || [];
+      return holes.filter(h => h && h > 0).length === round.holes;
+    });
+  });
+  const completedRoundIds = new Set(completedRounds.map(r => r.id));
+
+  // Helper: get all hole scores for a player across completed rounds only
   function getAllHoleData(playerId) {
     const holes = [];
-    for (const round of state.rounds) {
-      const pd = round.scores?.[playerId];
+    for (const round of completedRounds) {
+      let scoreKey = playerId;
+      if (round.scramble && round.teams) {
+        const team = round.teams.find(t => t.players.includes(playerId));
+        if (team) scoreKey = team.id;
+      }
+      const pd = round.scores?.[scoreKey];
       if (!pd?.participated) continue;
       const pars = round.pars || [];
       (pd.holes || []).forEach((score, i) => {
@@ -27,9 +50,9 @@ export function computeAwards(state) {
     return holes;
   }
 
-  // Helper: get per-round results for a player
+  // Helper: get per-round results for a player (completed rounds only)
   function getRoundResults(playerId) {
-    return standings.find(s => s.playerId === playerId)?.roundResults.filter(r => !r.skipped) || [];
+    return standings.find(s => s.playerId === playerId)?.roundResults.filter(r => !r.skipped && completedRoundIds.has(r.roundId)) || [];
   }
 
   // === 1. Tournament Champion ===
@@ -80,13 +103,13 @@ export function computeAwards(state) {
     let bestVariance = Infinity;
     let consistentPlayer = null;
     for (const s of multiRound) {
-      const scores = s.roundResults.filter(r => !r.skipped).map(r => r.rawTotal);
+      const scores = s.roundResults.filter(r => !r.skipped && completedRoundIds.has(r.roundId)).map(r => r.rawTotal);
       const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
       const variance = scores.reduce((sum, v) => sum + (v - avg) ** 2, 0) / scores.length;
       if (variance < bestVariance) { bestVariance = variance; consistentPlayer = s; }
     }
     if (consistentPlayer) {
-      const scores = consistentPlayer.roundResults.filter(r => !r.skipped).map(r => r.rawTotal);
+      const scores = consistentPlayer.roundResults.filter(r => !r.skipped && completedRoundIds.has(r.roundId)).map(r => r.rawTotal);
       awards.push({
         icon: '📏',
         title: 'Mr. Consistent',
@@ -101,13 +124,13 @@ export function computeAwards(state) {
     let worstVariance = -1;
     let wildPlayer = null;
     for (const s of multiRound) {
-      const scores = s.roundResults.filter(r => !r.skipped).map(r => r.rawTotal);
+      const scores = s.roundResults.filter(r => !r.skipped && completedRoundIds.has(r.roundId)).map(r => r.rawTotal);
       const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
       const variance = scores.reduce((sum, v) => sum + (v - avg) ** 2, 0) / scores.length;
       if (variance > worstVariance) { worstVariance = variance; wildPlayer = s; }
     }
     if (wildPlayer && worstVariance > 0) {
-      const scores = wildPlayer.roundResults.filter(r => !r.skipped).map(r => r.rawTotal);
+      const scores = wildPlayer.roundResults.filter(r => !r.skipped && completedRoundIds.has(r.roundId)).map(r => r.rawTotal);
       awards.push({
         icon: '🎢',
         title: 'Roller Coaster',
@@ -184,7 +207,7 @@ export function computeAwards(state) {
   if (state.rounds.length >= 2) {
     let bestImprovement = { player: null, diff: Infinity };
     for (const s of activePlayers) {
-      const played = s.roundResults.filter(r => !r.skipped);
+      const played = s.roundResults.filter(r => !r.skipped && completedRoundIds.has(r.roundId));
       if (played.length < 2) continue;
       const first = played[0].rawTotal;
       const last = played[played.length - 1].rawTotal;
@@ -205,7 +228,7 @@ export function computeAwards(state) {
   if (state.rounds.length >= 2) {
     let worstDecline = { player: null, diff: -Infinity };
     for (const s of activePlayers) {
-      const played = s.roundResults.filter(r => !r.skipped);
+      const played = s.roundResults.filter(r => !r.skipped && completedRoundIds.has(r.roundId));
       if (played.length < 2) continue;
       const first = played[0].rawTotal;
       const last = played[played.length - 1].rawTotal;
@@ -242,7 +265,7 @@ export function computeAwards(state) {
   let bestRound = { player: null, score: Infinity, round: '' };
   for (const s of activePlayers) {
     for (const rr of s.roundResults) {
-      if (rr.skipped) continue;
+      if (rr.skipped || !completedRoundIds.has(rr.roundId)) continue;
       if (rr.rawTotal < bestRound.score) {
         bestRound = { player: s.playerName, score: rr.rawTotal, round: rr.roundName };
       }
@@ -261,7 +284,7 @@ export function computeAwards(state) {
   let worstRound = { player: null, score: -Infinity, round: '' };
   for (const s of activePlayers) {
     for (const rr of s.roundResults) {
-      if (rr.skipped) continue;
+      if (rr.skipped || !completedRoundIds.has(rr.roundId)) continue;
       if (rr.rawTotal > worstRound.score) {
         worstRound = { player: s.playerName, score: rr.rawTotal, round: rr.roundName };
       }
@@ -276,30 +299,37 @@ export function computeAwards(state) {
     });
   }
 
-  // === 16. Best Hole (lowest single hole score) ===
-  let bestHoleScore = { player: null, score: Infinity, par: 0, round: '', hole: 0 };
+  // === 16. Best Hole (best score relative to par) ===
+  let bestHoleScore = { player: null, score: 0, par: 0, diff: Infinity, round: '', hole: 0 };
   for (const s of activePlayers) {
     const holes = getAllHoleData(s.playerId);
     for (const h of holes) {
-      if (h.score < bestHoleScore.score) {
-        bestHoleScore = { player: s.playerName, score: h.score, par: h.par, round: h.round, hole: h.hole };
+      const diff = h.score - h.par;
+      if (diff < bestHoleScore.diff || (diff === bestHoleScore.diff && h.score < bestHoleScore.score)) {
+        bestHoleScore = { player: s.playerName, score: h.score, par: h.par, diff, round: h.round, hole: h.hole };
       }
     }
   }
-  if (bestHoleScore.player) {
+  if (bestHoleScore.player && bestHoleScore.diff < Infinity) {
+    const label = bestHoleScore.diff <= -2 ? 'Eagle!' : bestHoleScore.diff === -1 ? 'Birdie' : 'Par';
     awards.push({
       icon: '🔥',
       title: 'Best Single Hole',
       winner: bestHoleScore.player,
-      detail: `Scored ${bestHoleScore.score} on a par ${bestHoleScore.par} (${bestHoleScore.round}, H${bestHoleScore.hole}).`,
+      detail: `${label} — ${bestHoleScore.score} on a par ${bestHoleScore.par} (${bestHoleScore.round}, H${bestHoleScore.hole}).`,
     });
   }
 
   // === 17. Comeback King (worst first 3 holes, best last 3 holes in any round) ===
   let bestComeback = { player: null, earlyOver: -Infinity, lateUnder: Infinity };
   for (const s of activePlayers) {
-    for (const round of state.rounds) {
-      const pd = round.scores?.[s.playerId];
+    for (const round of completedRounds) {
+      let scoreKey = s.playerId;
+      if (round.scramble && round.teams) {
+        const team = round.teams.find(t => t.players.includes(s.playerId));
+        if (team) scoreKey = team.id;
+      }
+      const pd = round.scores?.[scoreKey];
       if (!pd?.participated) continue;
       const holes = pd.holes || [];
       const pars = round.pars || [];
@@ -335,20 +365,6 @@ export function computeAwards(state) {
     });
   }
 
-  // === 19. The Grinder (most holes played) ===
-  let mostHoles = { player: null, count: 0 };
-  for (const s of activePlayers) {
-    const holes = getAllHoleData(s.playerId);
-    if (holes.length > mostHoles.count) mostHoles = { player: s.playerName, count: holes.length };
-  }
-  if (mostHoles.player) {
-    awards.push({
-      icon: '⚙️',
-      title: 'The Grinder',
-      winner: mostHoles.player,
-      detail: `${mostHoles.count} holes played. Never stops.`,
-    });
-  }
 
   // === 20. Rule Beneficiary (most bonus strokes from rules) ===
   let mostRuleBonus = { player: null, bonus: 0 };
